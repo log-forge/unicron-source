@@ -1,0 +1,13 @@
+debug = false
+
+[registry."localhost:5000"]
+  http = true
+  insecure = true
+
+[registry."host.docker.internal:5000"]
+  http = true
+  insecure = true
+
+[registry."registry:5000"]
+  http = true
+  insecure = true

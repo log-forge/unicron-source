@@ -1,0 +1,29 @@
+[project]
+name = "logforge-herald-legacy"
+version = "0.1.0"
+description = "Legacy Python Herald agent for LogForge Unicron development"
+authors = [
+    {name = "LogForge contributors"}
+]
+license = "LicenseRef-LogForge-Unicron-Proprietary"
+requires-python = ">=3.13"
+dependencies = [
+    "pydantic (>=2.11.7,<3.0.0)",
+    "pydantic-settings (>=2.10.1,<3.0.0)",
+    "python-dotenv (>=1.1.1,<2.0.0)",
+    "orjson (>=3.10.18,<4.0.0)",
+    "apscheduler (>=3.11.0,<4.0.0)",
+    "gunicorn (>=23.0.0,<24.0.0)",
+    "aiohttp (>=3.12.15,<4.0.0)",
+    "unicron_shared @ ../../libs/unicron_shared",
+    "python-socketio[asyncio-client] (>=5.13.0,<6.0.0)",
+    "docker (>=7.1.0,<8.0.0)",
+    "setuptools (>=80.9.0)",
+    "fastapi (>=0.120.2,<0.121.0)",
+    "uvicorn[standard] (>=0.38.0,<0.39.0)",
+]
+
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"

@@ -1,0 +1,18 @@
+[project]
+name = "test-backend"
+version = "0.1.0"
+description = "LogForge Unicron test backend"
+authors = [
+    {name = "LogForge contributors"}
+]
+license = "LicenseRef-LogForge-Unicron-Proprietary"
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi[standard] (>=0.117.1,<0.118.0)",
+    "cryptography (>=46.0.1,<47.0.0)"
+]
+
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"

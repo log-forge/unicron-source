@@ -1,0 +1,104 @@
+receivers:
+  hostmetrics:
+    collection_interval: 10s
+    # Root path for host-level metrics when running in a container with host mounts
+    root_path: /host/root
+    scrapers:
+      cpu: {}
+      disk: {}
+      filesystem: {}
+      load: {}
+      memory: {}
+      network: {}
+      paging: {}
+      # Overall process counters (running/blocked/zombies, etc.)
+      processes: {}
+      # Per-process metrics (requires host PID/proc mounts and root_path)
+      process:
+        include:
+          match_type: regexp
+          names: ['.*']
+        exclude:
+          match_type: regexp
+          # avoid scraping the collector and fluent-bit themselves
+          names: ['^otelcol.*$', '^fluent-bit$', '^nginx$']
+      system: {}
+  docker_stats:
+    endpoint: 'unix:///var/run/docker.sock'
+    collection_interval: 10s
+
+processors:
+  resourcedetection:
+    detectors: [env, system, docker]
+    system:
+      hostname_sources: [os]
+    override: false
+  resource/herald:
+    attributes:
+      - action: upsert
+        key: herald_name
+        value: ${HERALD_NAME}
+      - action: upsert
+        key: herald_id
+        value: ${HERALD_ID}
+      - action: upsert
+        key: herald_env
+        value: ${ENVIRONMENT}
+      # Ensure standard service identity attributes are present so central stream label can be built
+      - action: upsert
+        key: service_namespace
+        value: unicron_herald
+      - action: upsert
+        key: service_name
+        value: ${HERALD_NAME}
+      - action: upsert
+        key: service_instance_id
+        value: ${HERALD_ID}
+  batch:
+    send_batch_size: 2048
+    timeout: 5s
+
+exporters:
+  # Central OTLP/HTTP exporter shared by traces and metrics (exporter appends /v1/{taces/metrics})
+  otlphttp/central:
+    endpoint: ${CENTRAL_MTLS_URL}/unicron/otel
+    compression: gzip
+    tls:
+      ca_file: ${HERALD_CA_ROOT}
+      cert_file: ${HERALD_CERT}
+      key_file: ${HERALD_KEY}
+      insecure: false
+    retry_on_failure:
+      enabled: true
+      initial_interval: 3s
+      max_interval: 30s
+      max_elapsed_time: 0
+    sending_queue:
+      enabled: true
+      num_consumers: 2
+      queue_size: 60000
+  # Local debug exporter to print incoming telemetry (useful during troubleshooting)
+  debug: {}
+
+extensions:
+  health_check: {}
+  memory_limiter:
+    check_interval: 5s
+    limit_mib: 256
+    spike_limit_mib: 64
+
+service:
+  extensions: [health_check, memory_limiter]
+  telemetry:
+    metrics:
+      # Disable collector self-process metrics to avoid 'process does not exist' crash in nested dind env
+      level: none
+  pipelines:
+    # traces:
+    #   receivers: [otlp]
+    #   processors: [resourcedetection, resource/herald, batch]
+    #   exporters: [otlphttp/central, debug]
+    metrics:
+      receivers: [hostmetrics, docker_stats]
+      processors: [resourcedetection, resource/herald, batch]
+      exporters: [otlphttp/central, debug]

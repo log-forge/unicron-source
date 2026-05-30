@@ -1,0 +1,189 @@
+# Alerting services: alert-engine and notifier
+#
+# Complete alerting stack for the Unicron monitoring platform.
+#
+# Services:
+#   - alert-engine: Rule evaluation, alert triggering, Redis Stream publishing
+#   - notifier: Stream consumption, team routing, Celery task dispatch
+#   - notifier-worker: Celery worker for async notification delivery via Apprise
+#   - ollama: Local LLM inference for AI-enriched notifications (optional)
+#
+# Pipeline flow:
+#   log event -> alert-engine evaluates rules -> trigger creates AlertState
+#   -> publish to Redis Stream (unicron:alerts) -> notifier consumes
+#   -> team routing resolves channels -> Celery task queued -> worker delivers
+#
+# Usage:
+#   docker compose -f docker-compose.unicron.yaml \
+#                  -f docker-compose.alerting.yml \
+#                  -f docker-compose.alerting-services.yml up
+#
+# Prerequisites:
+#   - docker-compose.unicron.yaml provides: postgres, victoria-logs, victoria-metrics
+#   - docker-compose.alerting.yml provides: redis
+#   - POSTGRES_PASSWORD environment variable must be set
+#
+# Startup order:
+#   1. postgres, redis, victoria-logs, victoria-metrics (from base compose files)
+#   2. alert-engine (depends on postgres, redis, victoria-logs, victoria-metrics)
+#   3. notifier (depends on postgres, redis, alert-engine)
+#   4. notifier-worker (depends on redis, postgres)
+
+services:
+  # Alert Engine Service
+  # Evaluates alert rules against log/metric data and triggers alerts
+  alert-engine:
+    build:
+      context: ../../services/alert-engine
+      dockerfile: Dockerfile
+    image: unicron-alert-engine:latest
+    container_name: unicron-alert-engine
+    restart: unless-stopped
+    environment:
+      # Database connection (shared with Central)
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-unicron}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-unicron_db}
+      # Redis for caching, deduplication, and streams
+      REDIS_URL: redis://redis:6379/0
+      # Central API for local auth delegation and context lookups
+      CENTRAL_URL: http://unicron-backend:8000
+      # Internal API secret for service-to-service auth
+      INTERNAL_API_SECRET: ${INTERNAL_API_SECRET:-changeme}
+      # VictoriaLogs for log queries
+      VLOGS_BASE: http://unicron-victoria-logs:9428
+      # VictoriaMetrics for metric queries
+      VMETRICS_BASE: http://unicron-victoria-metrics:8428
+      # Evaluation interval in seconds
+      EVALUATION_INTERVAL_SECONDS: ${EVALUATION_INTERVAL_SECONDS:-60}
+      # Deduplication window in seconds
+      DEDUP_WINDOW_SECONDS: ${DEDUP_WINDOW_SECONDS:-300}
+      # Alert grouping configuration
+      GROUP_WAIT_SECONDS: ${GROUP_WAIT_SECONDS:-30}
+      GROUP_INTERVAL_SECONDS: ${GROUP_INTERVAL_SECONDS:-300}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      victoria-logs:
+        condition: service_healthy
+      victoria-metrics:
+        condition: service_healthy
+    networks:
+      - unicron-network
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "-sS", "http://localhost:8000/ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+
+  # Notifier Service
+  # Consumes alerts from Redis Stream and dispatches notifications
+  notifier:
+    build:
+      context: ../../services/notifier
+      dockerfile: Dockerfile
+    image: unicron-notifier:latest
+    container_name: unicron-notifier
+    restart: unless-stopped
+    environment:
+      # Database connection (shared with Central)
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-unicron}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-unicron_db}
+      # Redis for streams and caching
+      REDIS_URL: redis://redis:6379/0
+      # Celery broker (separate Redis DB)
+      CELERY_BROKER_URL: redis://redis:6379/1
+      # Central API for auth delegation and team context
+      CENTRAL_URL: http://unicron-backend:8000
+      # Internal API secret for service-to-service auth
+      INTERNAL_API_SECRET: ${INTERNAL_API_SECRET:-changeme}
+      # Redis Stream configuration
+      REDIS_STREAM_ALERTS: unicron:alerts
+      REDIS_CONSUMER_GROUP: notifier-consumers
+      REDIS_CONSUMER_BATCH_SIZE: ${REDIS_CONSUMER_BATCH_SIZE:-10}
+      REDIS_CONSUMER_BLOCK_MS: ${REDIS_CONSUMER_BLOCK_MS:-5000}
+      # Encryption key persistence
+      ENCRYPTION_KEY_PATH: /data/encryption.key
+    volumes:
+      - notifier-data:/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      alert-engine:
+        condition: service_healthy
+    networks:
+      - unicron-network
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "-sS", "http://localhost:8000/ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+
+  # Notifier Celery Worker
+  # Processes notification delivery tasks asynchronously
+  notifier-worker:
+    build:
+      context: ../../services/notifier
+      dockerfile: Dockerfile
+    image: unicron-notifier:latest
+    container_name: unicron-notifier-worker
+    restart: unless-stopped
+    command: celery -A celery_app worker --loglevel=info --concurrency=4
+    environment:
+      # Database connection for logging
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-unicron}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-unicron_db}
+      # Redis for caching
+      REDIS_URL: redis://redis:6379/0
+      # Celery broker
+      CELERY_BROKER_URL: redis://redis:6379/1
+      # Central API for auth delegation
+      CENTRAL_URL: http://unicron-backend:8000
+      # Internal API secret
+      INTERNAL_API_SECRET: ${INTERNAL_API_SECRET:-changeme}
+      # Encryption key persistence (shared with notifier)
+      ENCRYPTION_KEY_PATH: /data/encryption.key
+      # AI / Ollama configuration
+      OLLAMA_URL: http://unicron-ollama:11434
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-gemma3:1b}
+      AI_ENABLED: ${AI_ENABLED:-false}
+      AI_TIMEOUT: ${AI_TIMEOUT:-15}
+      AI_CACHE_TTL: ${AI_CACHE_TTL:-3600}
+    volumes:
+      - notifier-data:/data
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    networks:
+      - unicron-network
+
+  # Ollama AI Service
+  # Local LLM inference for AI-enriched notifications
+  ollama:
+    image: ollama/ollama:latest
+    container_name: unicron-ollama
+    restart: unless-stopped
+    volumes:
+      - ollama-data:/root/.ollama
+    ports:
+      - "11434:11434"
+    networks:
+      - unicron-network
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "-sS", "http://localhost:11434/api/tags"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  notifier-data:
+  ollama-data:
+
+networks:
+  unicron-network:
+    external: true

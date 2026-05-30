@@ -1,0 +1,23 @@
+{
+  "type": "message",
+  "attachments": [{
+    "contentType": "application/vnd.microsoft.card.adaptive",
+    "content": {
+      "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+      "type": "AdaptiveCard",
+      "version": "1.4",
+      "body": [
+        {"type": "TextBlock", "size": "Large", "weight": "Bolder", "text": "{{ title }}"},
+        {"type": "TextBlock", "text": "{{ message }}", "wrap": true},
+        {% if ai_summary %}
+        {"type": "TextBlock", "text": "\ud83e\udd16 AI Analysis: {{ ai_summary }}", "wrap": true, "color": "Accent"},
+        {% endif %}
+        {"type": "FactSet", "facts": [
+          {"title": "Rule", "value": "{{ rule_name }}"},
+          {"title": "Severity", "value": "{{ severity }}"},
+          {"title": "Time", "value": "{{ triggered_at }}"}
+        ]}
+      ]
+    }
+  }]
+}

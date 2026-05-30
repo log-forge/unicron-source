@@ -1,0 +1,101 @@
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 127.0.0.1:4317
+      http:
+        endpoint: 127.0.0.1:4318
+
+processors:
+  memory_limiter:
+    check_interval: 5s
+    limit_mib: 1024
+    spike_limit_mib: 256
+  resource:
+    attributes:
+      - key: collector_role
+        action: upsert
+        value: central
+  transform/logs_prepare:
+    log_statements:
+      - context: log
+        statements:
+          - set(attributes["msg"], body)
+  batch:
+    send_batch_size: 4000
+    timeout: 1s
+
+exporters:
+  prometheusremotewrite/victoria:
+    endpoint: http://127.0.0.1:8428/api/v1/write
+    retry_on_failure:
+      enabled: true
+      initial_interval: 5s
+      max_interval: 30s
+      max_elapsed_time: 0
+    resource_to_telemetry_conversion:
+      enabled: true
+  otlphttp/victoria_logs:
+    logs_endpoint: http://127.0.0.1:9428/insert/opentelemetry/v1/logs
+    headers:
+      VL-Stream-Fields: herald_id,container_key
+      VL-Msg-Field: msg
+    retry_on_failure:
+      enabled: true
+      initial_interval: 5s
+      max_interval: 30s
+      max_elapsed_time: 0
+    sending_queue:
+      enabled: true
+      num_consumers: 4
+      queue_size: 10000
+      storage: file_storage
+  otlphttp/backend_log_intake:
+    logs_endpoint: http://127.0.0.1:8000/internal/logs/otlp/v1/logs
+    compression: none
+    headers:
+      X-Internal-Secret: ${env:INTERNAL_API_SECRET}
+    retry_on_failure:
+      enabled: true
+      initial_interval: 5s
+      max_interval: 30s
+      max_elapsed_time: 0
+    sending_queue:
+      enabled: true
+      num_consumers: 4
+      queue_size: 10000
+      storage: file_storage
+
+extensions:
+  health_check:
+    endpoint: 127.0.0.1:13133
+    path: /healthz
+  file_storage:
+    directory: /var/lib/unicron/otelcol/storage
+    create_directory: true
+    timeout: 10s
+    compaction:
+      on_start: true
+      directory: /var/lib/unicron/otelcol/storage
+      max_transaction_size: 65536
+
+service:
+  extensions: [file_storage, health_check]
+  telemetry:
+    metrics:
+      level: basic
+      readers:
+        - pull:
+            exporter:
+              prometheus:
+                host: 127.0.0.1
+                port: 8888
+  pipelines:
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, resource, batch]
+      exporters: [prometheusremotewrite/victoria]
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, resource, transform/logs_prepare, batch]
+      exporters: [otlphttp/victoria_logs, otlphttp/backend_log_intake]

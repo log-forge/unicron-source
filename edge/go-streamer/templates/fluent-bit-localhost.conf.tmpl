@@ -1,0 +1,47 @@
+[SERVICE]
+    Flush         1
+    Log_Level     info
+    HTTP_Server   On
+    HTTP_Listen   0.0.0.0
+    HTTP_Port     2020
+    Hot_Reload    On
+{{if .MonitoredContainers}}
+{{- range .MonitoredContainers}}
+[INPUT]
+    Name              tail
+    Path              {{.LogPath}}
+    Tag               docker.{{.Name}}
+    Docker_Mode       On
+    Path_Key          path
+    DB                /tmp/flb_monitored.db
+    Refresh_Interval  5
+    Skip_Long_Lines   On
+    Mem_Buf_Limit     64MB
+
+{{end -}}
+[FILTER]
+    Name    modify
+    Match   docker.*
+    Add     herald_id ${HERALD_ID}
+    Add     herald_name ${HERALD_NAME}
+    Add     herald_env ${ENVIRONMENT}
+    Add     service_instance_id ${HERALD_ID}
+    Add     service_name ${HERALD_NAME}
+    Add     service_namespace unicron.herald
+
+[FILTER]
+    Name          lua
+    Match         docker.*
+    script        /app/herald/lua/docker_meta.lua
+    call          enrich
+    time_as_table true
+
+[OUTPUT]
+    Name                 opentelemetry
+    Match                docker.*
+    Host                 unicron-otel-collector
+    Port                 4318
+    tls                  Off
+    logs_uri             /v1/logs
+    logs_body_key        log
+{{- end}}

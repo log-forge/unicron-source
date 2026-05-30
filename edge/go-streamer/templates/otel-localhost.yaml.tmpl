@@ -1,0 +1,105 @@
+receivers:
+  hostmetrics:
+    collection_interval: 10s
+    root_path: /host/root
+    scrapers:
+      cpu: {}
+      disk: {}
+      filesystem: {}
+      load: {}
+      memory: {}
+      network: {}
+      paging: {}
+      processes: {}
+      process:
+        include:
+          match_type: regexp
+          names: ['.*']
+      system: {}
+  docker_stats:
+    endpoint: 'unix:///var/run/docker.sock'
+    api_version: '1.44'
+    collection_interval: 10s
+
+processors:
+  resourcedetection:
+    detectors: [env, system, docker]
+    system:
+      hostname_sources: [os]
+    override: false
+  resource/herald:
+    attributes:
+      - action: upsert
+        key: herald_name
+        value: ${HERALD_NAME}
+      - action: upsert
+        key: herald_id
+        value: ${HERALD_ID}
+      - action: upsert
+        key: herald_env
+        value: ${ENVIRONMENT}
+      - action: upsert
+        key: service_namespace
+        value: unicron_herald
+      - action: upsert
+        key: service_name
+        value: ${HERALD_NAME}
+      - action: upsert
+        key: service_instance_id
+        value: ${HERALD_ID}
+  # Convert delta temporality metrics to cumulative for VictoriaMetrics
+  # VictoriaMetrics does not support delta temporality metrics
+  deltatocumulative:
+    max_stale: 5m
+{{- if .UnmonitoredContainers}}
+  filter/unmonitored:
+    error_mode: ignore
+    metrics:
+      datapoint:
+{{- range .UnmonitoredContainers}}
+        - 'resource.attributes["container.name"] == "{{.Name}}"'
+{{- end}}
+{{- end}}
+  batch:
+    send_batch_size: 2048
+    timeout: 5s
+
+exporters:
+  otlphttp/central:
+    endpoint: http://unicron-otel-collector:4318
+    compression: gzip
+    retry_on_failure:
+      enabled: true
+      initial_interval: 3s
+      max_interval: 30s
+      max_elapsed_time: 0
+    sending_queue:
+      enabled: true
+      num_consumers: 2
+      queue_size: 60000
+      storage: file_storage
+
+extensions:
+  health_check: {}
+  memory_limiter:
+    check_interval: 5s
+    limit_mib: 256
+    spike_limit_mib: 64
+  file_storage:
+    directory: /var/lib/otelcol/queue
+    timeout: 10s
+    compaction:
+      on_start: true
+      directory: /var/lib/otelcol/queue
+      max_transaction_size: 65536
+
+service:
+  extensions: [health_check, memory_limiter, file_storage]
+  telemetry:
+    metrics:
+      level: none
+  pipelines:
+    metrics:
+      receivers: [hostmetrics, docker_stats]
+      processors: [resourcedetection, resource/herald, deltatocumulative,{{if .UnmonitoredContainers}} filter/unmonitored,{{end}} batch]
+      exporters: [otlphttp/central]

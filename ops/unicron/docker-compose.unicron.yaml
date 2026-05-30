@@ -1,0 +1,749 @@
+name: unicron
+
+x-push-logging: &push_logging
+  driver: fluentd
+  options:
+    fluentd-address: "${FLUENTD_ADDRESS:-127.0.0.1:24224}"
+    fluentd-async: "true"
+    fluentd-async-reconnect-interval: "2s"
+    fluentd-sub-second-precision: "true"
+    tag: "app.{{.Name}}"
+
+x-push-defaults: &push_defaults
+  labels:
+    unicron.telemetry.mode: "push"
+  logging: *push_logging
+
+services:
+  stepca-init:
+    <<: *push_defaults
+    image: smallstep/step-ca:0.29.0
+    container_name: unicron-stepca-init
+    user: root
+    profiles:
+      - init
+    networks:
+      unicron-network:
+        aliases:
+          - ${UNICRON_CENTRAL_FQDN}
+    entrypoint: ['/bin/sh', '/home/step/bootstrap.sh']
+    environment:
+      UNICRON_CENTRAL_FQDN: '${UNICRON_CENTRAL_FQDN}'
+      STEP_CA_DNS: 'unicron.central, stepca, unicron-stepca, ${UNICRON_CENTRAL_FQDN}'
+      STEP_RA_DNS: 'unicron.central, stepca-ra, unicron-stepca-ra, ${UNICRON_CENTRAL_FQDN}'
+      TRAEFIK_CERT_SANS: 'localhost, 127.0.0.1, host.docker.internal, unicron.central, traefik, unicron-traefik, ${UNICRON_CENTRAL_FQDN}'
+      TRAEFIK_CERT_NOT_AFTER_SECONDS: '43200'
+      TRAEFIK_RENEW_EXPIRES_IN_SECONDS: '28800'
+      RA_DEFAULT_TLS_CERT_DURATION: '12h'
+      RA_MAX_TLS_CERT_DURATION: '12h'
+      STEPDEBUG: '1'
+    volumes:
+      - stepca-data:/home/step
+      - stepca-trust:/home/step/trust
+      - traefik-tls:/home/step/traefik-certs
+      - stepca-ra-provisioner:/home/step/ra-provisioner
+      - traefik-data:/etc/traefik/shared
+      - ./ca/bootstrap.sh:/home/step/bootstrap.sh:ro
+      - ./ca/post-renew-traefik.sh:/home/step/post-renew-traefik.sh:ro
+      - ./ca/step-ca-password.txt:/home/step/secrets/ca.jwk.pw:ro
+      - ./ca/step-ca-provisioner-password.txt:/home/step/secrets/provisioner.jwk.pw:ro
+      - ./ca/step-ca-ra-password.txt:/home/step/secrets/ra.jwk.pw:ro
+
+  stepca:
+    <<: *push_defaults
+    image: smallstep/step-ca:0.29.0
+    container_name: unicron-stepca
+    user: root
+    networks:
+      unicron-network:
+        aliases:
+          - ${UNICRON_CENTRAL_FQDN}
+    entrypoint: ['/bin/sh', '/home/step/runtime.sh']
+    environment:
+      UNICRON_CENTRAL_FQDN: '${UNICRON_CENTRAL_FQDN}'
+      STEP_CA_DNS: 'unicron.central, stepca, unicron-stepca, ${UNICRON_CENTRAL_FQDN}'
+      STEP_RA_DNS: 'unicron.central, stepca-ra, unicron-stepca-ra, ${UNICRON_CENTRAL_FQDN}'
+      TRAEFIK_CERT_SANS: 'localhost, 127.0.0.1, host.docker.internal, unicron.central, traefik, unicron-traefik, ${UNICRON_CENTRAL_FQDN}'
+      TRAEFIK_CERT_NOT_AFTER_SECONDS: '43200' # 12 hours (expire after 12 hours)
+      TRAEFIK_RENEW_EXPIRES_IN_SECONDS: '28800' # 8 hours (renew earlier to avoid boundary misses near 6h threshold)
+      RA_DEFAULT_TLS_CERT_DURATION: '12h'
+      RA_MAX_TLS_CERT_DURATION: '12h'
+      STEPDEBUG: '1'
+    volumes:
+      - stepca-data:/home/step
+      - stepca-trust:/home/step/trust
+      - traefik-tls:/home/step/traefik-certs
+      - stepca-ra-provisioner:/home/step/ra-provisioner
+      - traefik-data:/etc/traefik/shared
+      - ./ca/bootstrap.sh:/home/step/bootstrap.sh:ro
+      - ./ca/runtime.sh:/home/step/runtime.sh:ro
+      - ./ca/post-renew-traefik.sh:/home/step/post-renew-traefik.sh:ro
+      - ./ca/step-ca-password.txt:/home/step/secrets/ca.jwk.pw:ro
+      - ./ca/step-ca-provisioner-password.txt:/home/step/secrets/provisioner.jwk.pw:ro
+      - ./ca/step-ca-ra-password.txt:/home/step/secrets/ra.jwk.pw:ro
+    expose:
+      - '9000' # CA internal port
+    healthcheck:
+      # Report healthy only when the CA API is actually serving (not just when bootstrap stamp exists).
+      test: ['CMD', 'curl', '--fail', '-sk', 'https://localhost:9000/health']
+      interval: 5s
+      timeout: 5s
+      retries: 15
+      start_period: 5s
+
+  stepca-ra:
+    <<: *push_defaults
+    image: smallstep/step-ca:0.29.0
+    container_name: unicron-stepca-ra
+    user: root
+    networks:
+      - unicron-network
+    environment:
+      UNICRON_CENTRAL_FQDN: '${UNICRON_CENTRAL_FQDN}'
+      STEPDEBUG: '1'
+    depends_on:
+      stepca:
+        condition: service_healthy
+    volumes:
+      - stepca-data:/home/step
+      - ./ca/step-ca-ra-password.txt:/home/step/secrets/ra.jwk.pw:ro
+    expose:
+      - '9100' # RA internal port
+    command: >
+      step-ca
+        --issuer-password-file /home/step/secrets/ra.jwk.pw
+        /home/step/config/ra-ca.json
+    healthcheck:
+      test: ['CMD', 'curl', '--fail', '-sk', 'https://localhost:9100/health']
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+
+  traefik:
+    <<: *push_defaults
+    image: traefik:v3.4
+    container_name: 'unicron-traefik'
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - unicron-network
+    depends_on:
+      stepca:
+        condition: service_healthy
+    entrypoint: ['/etc/traefik/entrypoint.traefik.sh']
+    command:
+      - '--ping=true'
+      - '--ping.entrypoint=web'
+      # File provider only. All routers/services are defined in the rendered
+      # traefik-config.yaml and do not depend on Docker label discovery.
+      - '--providers.file.filename=/etc/traefik/shared/traefik-config.yaml'
+      - '--providers.file.watch=true'
+      - '--entrypoints.web.address=:80'
+      - '--entrypoints.web.http.redirections.entrypoint.to=websecure'
+      - '--entrypoints.web.http.redirections.entrypoint.scheme=https'
+      - '--entrypoints.web.http.redirections.entrypoint.permanent=true'
+      - '--entrypoints.websecure.address=:${UNICRON_CENTRAL_PORT}'
+      - '--entrypoints.websecure.http.tls.options=default@file'
+      - '--entrypoints.mtls.address=:${UNICRON_CENTRAL_MTLS_PORT}'
+      - '--entrypoints.mtls.http.tls=true'
+      - '--entrypoints.mtls.http.tls.options=mtls@file'
+      - '--log.level=DEBUG'
+      - '--accesslog=true'
+      - '--accesslog.fields.defaultmode=keep'
+      - '--accesslog.fields.names.TLSClientSubject=keep'
+    ports:
+      - '80:80' # Optional HTTP (redirects to UNICRON_CENTRAL_PORT)
+      - '${UNICRON_CENTRAL_PORT}:${UNICRON_CENTRAL_PORT}' # Browser/UI + API TLS termination
+      - '${UNICRON_CENTRAL_MTLS_PORT}:${UNICRON_CENTRAL_MTLS_PORT}' # Herald agent (mTLS)
+    volumes:
+      - traefik-tls:/ca/certs:ro
+      - traefik-data:/etc/traefik/shared
+      - ./traefik/entrypoint.traefik.sh:/etc/traefik/entrypoint.traefik.sh:ro
+      - ./traefik/configs/traefik-config.template.yaml:/etc/traefik/traefik-config.template.yaml:ro
+    environment:
+      TRAEFIK_ROUTER_HOSTS: 'localhost, 127.0.0.1, host.docker.internal, unicron.central, test-backend, unicron-test-backend, traefik, unicron-traefik, ${UNICRON_CENTRAL_FQDN}'
+      # Dev-only: expose Victoria vendor UIs on the browser entrypoint.
+      TRAEFIK_EXPOSE_VICTORIA_UI: '${TRAEFIK_EXPOSE_VICTORIA_UI:-true}'
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'wget',
+          '--no-verbose',
+          '--tries=1',
+          '-qO-',
+          'http://localhost:80/ping',
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 5s
+
+  backend:
+    <<: *push_defaults
+    build:
+      context: ../../
+      dockerfile: central/unicron/backend/Dockerfile
+      target: runtime
+    image: unicron-backend
+    container_name: 'unicron-backend'
+    restart: unless-stopped
+    networks:
+      - unicron-network
+    # extra_hosts to allow backend to resolve the unicron central hostname to host-gateway for API calls in dev/test envs
+    extra_hosts:
+      - 'unicron.localtest.me:host-gateway'
+    env_file:
+      - ../../central/unicron/backend/.env
+    environment:
+      ENVIRONMENT: 'production'
+      API_BASE_URL: '/unicron/api'
+      ROOT_PATH: '/unicron'
+      CENTRAL_AUTH_BASE_URL: 'http://central-auth:3020'
+      CENTRAL_AUTH_VERIFY_TLS: 'false'
+      # Browser origin allowlist for HTTP + Socket.IO. Empty keeps existing behavior.
+      CORS_ORIGINS: '${CORS_ORIGINS:-}'
+      # Canonical origin allowlist override (comma-separated). Empty uses DB-managed policy.
+      UNICRON_ALLOWED_ORIGINS: '${UNICRON_ALLOWED_ORIGINS:-}'
+      # When true, env origins are protected seeds and the UI may add extra origins.
+      UNICRON_ALLOW_UI_ORIGIN_ADDITIONS: '${UNICRON_ALLOW_UI_ORIGIN_ADDITIONS:-true}'
+      CORS_ORIGIN_REGEX: Null
+      CORS_ALLOW_CREDENTIALS: True
+      CORS_MAX_AGE: 600
+      UNICRON_CENTRAL_FQDN: '${UNICRON_CENTRAL_FQDN}'
+      UNICRON_CENTRAL_PORT: ${UNICRON_CENTRAL_PORT}
+      UNICRON_CENTRAL_MTLS_PORT: ${UNICRON_CENTRAL_MTLS_PORT}
+      UNICRON_PUBLIC_CENTRAL_MTLS_PORT: ${UNICRON_PUBLIC_CENTRAL_MTLS_PORT:-${UNICRON_CENTRAL_MTLS_PORT}}
+      UNICRON_DATA_DIR: '/var/lib/unicron'
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_HOST: 'postgres'
+      POSTGRES_PORT: 5432
+      SOCKETIO_REDIS_URL: 'redis://redis:6379'
+      REDIS_URL: 'redis://redis:6379'
+      ROOT_CA: '/ca/certs/root_ca.crt'
+      CA_URL: 'https://${UNICRON_CENTRAL_FQDN}:9000'
+      RA_URL: 'https://unicron-stepca-ra:9100'
+      RA_PROVISIONER_KEY: '/ca/ra/ra.jwk.json'
+      VLOGS_BASE: 'http://unicron-victoria-logs:9428'
+      VMETRICS_BASE: 'http://unicron-victoria-metrics:8428'
+      INTERNAL_API_SECRET: ${INTERNAL_API_SECRET:?INTERNAL_API_SECRET is required}
+      INTERNAL_LOGS_MAX_BODY_BYTES: ${INTERNAL_LOGS_MAX_BODY_BYTES:-2097152}
+      INTERNAL_LOGS_HARD_MAX_BODY_BYTES: ${INTERNAL_LOGS_HARD_MAX_BODY_BYTES:-16777216}
+      PING_INTERVAL: 60
+      HERALD_STALE_GRACE: 3
+      CLEANUP_INTERVAL_SECONDS: 3600
+      TOKEN_EXPIRY_SECONDS: 18000
+      # Remote agent image used by enrollment command generation.
+      REMOTE_AGENT_IMAGE: ${REMOTE_AGENT_IMAGE:-localhost:5000/unicron-go-streamer:latest}
+      ENABLE_LOG_FANOUT_WORKER: '${ENABLE_LOG_FANOUT_WORKER:-true}'
+      ENABLE_CONTAINER_WS_RELAY: '${ENABLE_CONTAINER_WS_RELAY:-true}'
+      ENABLE_ALERT_WS_RELAY: '${ENABLE_ALERT_WS_RELAY:-true}'
+      ENABLE_AGENT_HEARTBEAT_MONITOR: '${ENABLE_AGENT_HEARTBEAT_MONITOR:-true}'
+      ENABLE_SCHEDULER: '${ENABLE_SCHEDULER:-true}'
+    depends_on:
+      traefik:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      central-auth:
+        condition: service_healthy
+    #   - '8000:8000' # Optional: expose backend port to host for direct access for development/debugging
+    volumes:
+      - stepca-trust:/ca/certs:ro
+      # Narrow RA provisioner mount for short-lived CSR signing tokens.
+      - stepca-ra-provisioner:/ca/ra:ro
+      - unicron-data:/var/lib/unicron
+      - ./ca/step-ca-ra-password.txt:/ca/secrets/ra.jwk.pw:ro
+    healthcheck:
+      test: ['CMD', 'curl', '--fail', '-sS', 'http://localhost:8000/api/health']
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 5s
+
+  frontend:
+    <<: *push_defaults
+    build:
+      context: ../../
+      dockerfile: central/unicron/frontend/Dockerfile
+      args:
+        VITE_BETTER_AUTH_URL: ''
+        VITE_AUTH_BASE_URL: '${FRONTEND_AUTH_PROXY_BASE:-/unicron/auth}'
+        VITE_API_BASE_URL: '/unicron/api'
+        VITE_EXTERNAL_API_BASE_URL: ''
+        VITE_SHOW_RQ_DEVTOOLS: 'true'
+        VITE_AUTH_MODE: 'cookie'
+    image: unicron-frontend
+    container_name: 'unicron-frontend'
+    restart: unless-stopped
+    networks:
+      - unicron-network
+    # extra_hosts to allow frontend to resolve the unicron central hostname to host-gateway for API calls in dev/test envs
+    extra_hosts:
+      - 'unicron.localtest.me:host-gateway'
+    environment:
+      - VITE_NODE_ENV=production
+      - VITE_API_BASE_URL=/unicron/api
+      - VITE_EXTERNAL_API_BASE_URL=
+      - VITE_SHOW_RQ_DEVTOOLS=true
+      - VITE_BETTER_AUTH_URL=
+      - VITE_AUTH_BASE_URL=${FRONTEND_AUTH_PROXY_BASE:-/unicron/auth}
+      - VITE_AUTH_MODE=cookie
+      - AUTH_BASE_URL=http://central-auth:3020
+      # Server-side (SSR) inside container goes explicitly through docker internal host (TLS cert chain); adjust to http://backend:8000/api to bypass Traefik if desired
+      - INTERNAL_API_BASE_URL=https://traefik
+      - UNICRON_CENTRAL_FQDN=${UNICRON_CENTRAL_FQDN}
+      - PORT=${UNICRON_FRONTEND_PORT} # Ensure prod server listens on expected port (Traefik frontend-service expects 5173)
+      - NODE_EXTRA_CA_CERTS=/ca/certs/root_ca.crt
+      # Skip TLS verification for auth requests when using a dev TLS target.
+      - SKIP_AUTH_TLS_VERIFY=${SKIP_AUTH_TLS_VERIFY:-true}
+      - CSRF_COOKIE_SECRET=${CSRF_COOKIE_SECRET}
+      - CSRF_SECRET=${CSRF_SECRET}
+    depends_on:
+      traefik:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+      central-auth:
+        condition: service_healthy
+    volumes:
+      # Mount CA certificates so Node trusts ca_root.crt
+      - stepca-trust:/ca/certs:ro
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'wget',
+          '--no-verbose',
+          '--tries=1',
+          '--spider',
+          'http://localhost:5173/healthz',
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 5s
+
+  postgres:
+    <<: *push_defaults
+    image: 'postgres:14.18'
+    container_name: 'unicron-postgres'
+    restart: always
+    networks:
+      - unicron-network
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    # ports:
+    #   - '5432:5432' # Optional: expose Postgres port to host for direct access for development/debugging
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        [
+          'CMD-SHELL',
+          "sh -c 'pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB} -h localhost'",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 5s
+
+  redis:
+    <<: *push_defaults
+    image: redis:7-alpine
+    container_name: unicron-redis
+    restart: always
+    networks:
+      - unicron-network
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 5s
+
+  central-auth-mongodb:
+    <<: *push_defaults
+    image: mongo:7
+    container_name: unicron-central-auth-mongodb
+    restart: unless-stopped
+    networks:
+      - unicron-network
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${CENTRAL_AUTH_MONGO_ROOT_USERNAME:-root}
+      MONGO_INITDB_ROOT_PASSWORD: ${CENTRAL_AUTH_MONGO_ROOT_PASSWORD:-password}
+    volumes:
+      - central-auth-mongo-data:/data/db
+    healthcheck:
+      test: ['CMD', 'mongosh', '--quiet', '--eval', 'db.adminCommand("ping").ok']
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+
+  central-auth:
+    <<: *push_defaults
+    build:
+      context: ../../
+      dockerfile: central/auth/Dockerfile
+    image: unicron-central-auth
+    container_name: central-auth
+    restart: unless-stopped
+    networks:
+      - unicron-network
+    depends_on:
+      central-auth-mongodb:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 3020
+      MONGODB_URI: 'mongodb://${CENTRAL_AUTH_MONGO_ROOT_USERNAME:-root}:${CENTRAL_AUTH_MONGO_ROOT_PASSWORD:-password}@central-auth-mongodb:27017/?authSource=admin'
+      MONGODB_DB_NAME: '${CENTRAL_AUTH_MONGODB_DB_NAME:-unicron_central_auth}'
+      MONGODB_TLS: 'false'
+      CENTRAL_AUTH_SECRET: '${CENTRAL_AUTH_SECRET:?CENTRAL_AUTH_SECRET is required}'
+      CENTRAL_AUTH_BASE_URL: 'https://${UNICRON_CENTRAL_FQDN}:${UNICRON_CENTRAL_PORT}/unicron/auth'
+      CENTRAL_AUTH_COOKIE_NAME: '${CENTRAL_AUTH_COOKIE_NAME:-unicron.central_auth.session}'
+      CENTRAL_ADMIN_USERNAME: '${CENTRAL_ADMIN_USERNAME:-admin}'
+      CENTRAL_ADMIN_PASSWORD: '${CENTRAL_ADMIN_PASSWORD:-}'
+      CENTRAL_ADMIN_RECOVERY_OVERRIDE: '${CENTRAL_ADMIN_RECOVERY_OVERRIDE:-false}'
+      CORS_ORIGINS: 'https://${UNICRON_CENTRAL_FQDN}:${UNICRON_CENTRAL_PORT},https://localhost:${UNICRON_CENTRAL_PORT},https://127.0.0.1:${UNICRON_CENTRAL_PORT}'
+    healthcheck:
+      test: ['CMD', 'wget', '--no-verbose', '--tries=1', '-qO-', 'http://localhost:3020/readyz']
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+
+  victoria-metrics:
+    <<: *push_defaults
+    image: victoriametrics/victoria-metrics:v1.120.0
+    container_name: unicron-victoria-metrics
+    restart: always
+    networks:
+      - unicron-network
+    depends_on:
+      traefik:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    volumes:
+      - victoria-metrics-data:/storage/vmetrics
+    command:
+      - -storageDataPath=/storage/vmetrics
+      - -retentionPeriod=7d
+      - -graphiteListenAddr=:2003
+      - -opentsdbListenAddr=:4242
+      - -influxListenAddr=:8089
+      - -loggerLevel=INFO
+      - -loggerFormat=json
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'wget',
+          '--no-verbose',
+          '--tries=1',
+          '--spider',
+          'http://127.0.0.1:8428/health',
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+
+  victoria-logs:
+    <<: *push_defaults
+    image: victoriametrics/victoria-logs:v1.24.0-victorialogs
+    container_name: unicron-victoria-logs
+    restart: always
+    networks:
+      - unicron-network
+    depends_on:
+      traefik:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    volumes:
+      - victoria-logs-data:/storage/vlogs
+    command:
+      - -storageDataPath=/storage/vlogs
+      - -retentionPeriod=7d
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'wget',
+          '--no-verbose',
+          '--tries=1',
+          '--spider',
+          'http://127.0.0.1:9428/health',
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+
+  tempo:
+    <<: *push_defaults
+    image: grafana/tempo:2.6.0
+    container_name: unicron-tempo
+    restart: unless-stopped
+    networks:
+      - unicron-network
+    depends_on:
+      traefik:
+        condition: service_healthy
+    volumes:
+      - tempo-data:/var/tempo
+      - ./tempo/tempo-config.yaml:/etc/tempo/tempo.yaml:ro
+    command: ['-config.file=/etc/tempo/tempo.yaml']
+    healthcheck:
+      test:
+        [
+          'CMD-SHELL',
+          'wget --no-verbose --tries=1 --spider http://localhost:3200/ready || exit 1',
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 25s
+
+  otel-collector:
+    <<: *push_defaults
+    # Custom image includes busybox so healthcheck command has wget/sh available
+    build:
+      context: ./otel
+      dockerfile: Dockerfile
+      args:
+        OTEL_VERSION: latest
+    image: unicron-otel-collector:latest
+    container_name: unicron-otel-collector
+    restart: unless-stopped
+    networks:
+      - unicron-network
+    depends_on:
+      tempo:
+        condition: service_healthy
+      victoria-metrics:
+        condition: service_healthy
+      victoria-logs:
+        condition: service_healthy
+    volumes:
+      - ./otel/collector-config.yaml:/etc/otelcol/config.yaml:ro
+      - otel-data:/var/lib/otelcol
+    environment:
+      - CENTRAL_MODE=1
+      - INTERNAL_API_SECRET=${INTERNAL_API_SECRET:?INTERNAL_API_SECRET is required}
+    command:
+      - --config=/etc/otelcol/config.yaml
+    healthcheck:
+      test:
+        [
+          'CMD-SHELL',
+          'wget -q -O - http://localhost:13133/healthz >/dev/null 2>&1 || exit 1',
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+      start_period: 25s
+
+  test-backend:
+    <<: *push_defaults
+    build:
+      context: ../../
+      dockerfile: central/test-backend/Dockerfile
+    image: unicron-test-backend
+    container_name: unicron-test-backend
+    restart: unless-stopped
+    networks:
+      - unicron-network
+    healthcheck:
+      test: ['CMD', 'curl', '--fail', '-sS', 'http://localhost:8000/health']
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 5s
+
+  alert-engine:
+    <<: *push_defaults
+    build:
+      context: ../../
+      dockerfile: services/alert-engine/Dockerfile
+    image: unicron-alert-engine
+    container_name: unicron-alert-engine
+    restart: unless-stopped
+    networks:
+      - unicron-network
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      central-auth:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      REDIS_URL: 'redis://redis:6379'
+      CENTRAL_URL: 'http://unicron-backend:8000'
+      CENTRAL_AUTH_BASE_URL: 'http://central-auth:3020'
+      CENTRAL_AUTH_VERIFY_TLS: 'false'
+      INTERNAL_API_SECRET: ${INTERNAL_API_SECRET:?INTERNAL_API_SECRET is required}
+    healthcheck:
+      test: ['CMD', 'curl', '--fail', '-sS', 'http://localhost:8000/health']
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+
+  notifier:
+    <<: *push_defaults
+    build:
+      context: ../../
+      dockerfile: services/notifier/Dockerfile
+    image: unicron-notifier
+    container_name: unicron-notifier
+    restart: unless-stopped
+    networks:
+      - unicron-network
+    volumes:
+      - notifier-data:/data
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      central-auth:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      REDIS_URL: 'redis://redis:6379'
+      CENTRAL_URL: 'http://unicron-backend:8000'
+      CENTRAL_AUTH_BASE_URL: 'http://central-auth:3020'
+      CENTRAL_AUTH_VERIFY_TLS: 'false'
+      INTERNAL_API_SECRET: ${INTERNAL_API_SECRET:?INTERNAL_API_SECRET is required}
+    healthcheck:
+      test: ['CMD', 'curl', '--fail', '-sS', 'http://localhost:8000/health']
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+
+  notifier-worker:
+    <<: *push_defaults
+    build:
+      context: ../../
+      dockerfile: services/notifier/Dockerfile
+    image: unicron-notifier
+    container_name: unicron-notifier-worker
+    restart: unless-stopped
+    networks:
+      - unicron-network
+    volumes:
+      - notifier-data:/data
+    depends_on:
+      redis:
+        condition: service_healthy
+      notifier:
+        condition: service_healthy
+      central-auth:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      REDIS_URL: 'redis://redis:6379'
+      CENTRAL_URL: 'http://unicron-backend:8000'
+      CENTRAL_AUTH_BASE_URL: 'http://central-auth:3020'
+      CENTRAL_AUTH_VERIFY_TLS: 'false'
+      INTERNAL_API_SECRET: ${INTERNAL_API_SECRET:?INTERNAL_API_SECRET is required}
+    command:
+      [
+        'celery',
+        '-A',
+        'celery_app',
+        'worker',
+        '--loglevel=info',
+        '--pidfile=/tmp/celery.pid',
+        '--pool=prefork',
+        '--concurrency=4',
+      ]
+    healthcheck:
+      test: ['CMD-SHELL', 'test -f /tmp/celery.pid && kill -0 "$$(cat /tmp/celery.pid)"']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  stepca-data:
+    name: unicron-stepca-data
+  stepca-trust:
+    name: unicron-stepca-trust
+  stepca-ra-provisioner:
+    name: unicron-stepca-ra-provisioner
+  traefik-tls:
+    name: unicron-traefik-tls
+  traefik-data:
+    name: unicron-traefik-data
+  unicron-data:
+    name: unicron-data
+  postgres-data:
+    name: unicron-postgres-data
+  redis-data:
+    name: unicron-redis-data
+  victoria-metrics-data:
+    name: unicron-victoria-metrics-data
+  victoria-logs-data:
+    name: unicron-victoria-logs-data
+  tempo-data:
+    name: unicron-tempo-data
+  otel-data:
+    name: unicron-otel-data
+  notifier-data:
+    name: unicron-notifier-data
+  central-auth-mongo-data:
+    name: unicron-central-auth-mongo-data
+
+networks:
+  unicron-network:
+    external: true
+# Example: grant Traefik read-only access to the step CA certs by mounting the same volume read-only
+# services:
+#   traefik:
+#     image: traefik:latest
+#     volumes:
+#       - stepca-data:/home/step:ro
+#       - traefik-data:/etc/traefik/shared
+#
+# Commented example to run Traefik as a user that belongs to the 'stepgroup' so it can read certs:
+# services:
+#   traefik:
+#     image: traefik:latest
+#     container_name: traefik
+#     user: traefik
+#     group_add:
+#       - stepgroup
+#     volumes:
+#       - stepca-data:/home/step:ro
+#       - traefik-data:/etc/traefik/shared

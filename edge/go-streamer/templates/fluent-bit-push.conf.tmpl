@@ -1,0 +1,51 @@
+[SERVICE]
+    Flush         {{.FLBFlushSeconds}}
+    Log_Level     info
+    HTTP_Server   On
+    HTTP_Listen   0.0.0.0
+    HTTP_Port     2022
+{{if .DurableQueue}}
+    storage.path  {{.FLBStoragePath}}
+    storage.sync  {{.FLBStorageSync}}
+    storage.backlog.mem_limit {{.FLBStorageBacklogMemLimit}}
+{{if .FLBStorageMaxChunksUp}}
+    storage.max_chunks_up {{.FLBStorageMaxChunksUp}}
+{{end}}
+{{end}}
+{{if .PushLogsEnabled}}
+[INPUT]
+    Name          forward
+    Listen        0.0.0.0
+    Port          24224
+    Tag           pushed.logs
+    Mem_Buf_Limit {{.FLBMemBufLimit}}
+{{if .DurableQueue}}
+    storage.type  filesystem
+{{end}}
+
+[INPUT]
+    Name          http
+    Listen        0.0.0.0
+    Port          9880
+    Tag           pushed.logs
+    Mem_Buf_Limit {{.FLBMemBufLimit}}
+{{if .DurableQueue}}
+    storage.type  filesystem
+{{end}}
+
+[OUTPUT]
+    Name                 http
+    Match                *
+    Host                 127.0.0.1
+    Port                 8686
+    workers              {{.FLBOutputWorkers}}
+{{if .DurableQueue}}
+    storage.total_limit_size {{.FLBStorageTotalLimit}}
+{{end}}
+    Retry_Limit          False
+    uri                  /internal/logs/batch
+    format               json_lines
+    header_tag           FLUENT-TAG
+    json_date_key        timestamp
+    json_date_format     iso8601
+{{end}}

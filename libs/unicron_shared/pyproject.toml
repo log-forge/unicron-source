@@ -1,0 +1,20 @@
+[project]
+name = "unicron_shared"
+version = "0.1.0"
+description = "Shared classes and enums for LogForge Unicron services"
+authors = [
+    {name = "LogForge contributors"}
+]
+license = "LicenseRef-LogForge-Unicron-Proprietary"
+requires-python = ">=3.9"
+
+[tool.poetry]
+packages = [
+    { include = "unicron_shared" }
+]
+
+[tool.poetry.dependencies]
+pydantic = "^2.11.7"
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"

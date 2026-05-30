@@ -1,0 +1,230 @@
+tls:
+  certificates:
+    - certFile: '/var/lib/unicron/pki/traefik-certs/unicron-traefik-leaf.crt'
+      keyFile: '/var/lib/unicron/pki/traefik-certs/unicron-traefik-leaf.key'
+  stores:
+    default:
+      defaultCertificate:
+        certFile: '/var/lib/unicron/pki/traefik-certs/unicron-traefik-leaf.crt'
+        keyFile: '/var/lib/unicron/pki/traefik-certs/unicron-traefik-leaf.key'
+  options:
+    default:
+      minVersion: VersionTLS12
+      cipherSuites:
+        - TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384
+        - TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+    mtls:
+      clientAuth:
+        caFiles:
+          - '/var/lib/unicron/pki/traefik-certs/root_ca.crt'
+        clientAuthType: RequireAndVerifyClientCert
+
+http:
+  middlewares:
+    pass-client-cert:
+      passTLSClientCert:
+        pem: true
+        info:
+          subject:
+            commonName: true
+            organization: true
+          serialNumber: true
+          sans: true
+    victoria-metrics-strip:
+      stripPrefix:
+        prefixes:
+          - /victoria-metrics
+    victoria-logs-strip:
+      stripPrefix:
+        prefixes:
+          - /victoria-logs
+    unicron-strip:
+      stripPrefix:
+        prefixes:
+          - /unicron
+    alert-engine-strip:
+      stripPrefix:
+        prefixes:
+          - /unicron/api/alert-engine
+        forceSlash: false
+    alert-engine-add-api:
+      addPrefix:
+        prefix: /api
+    notifier-strip:
+      stripPrefix:
+        prefixes:
+          - /unicron/api/notifier
+        forceSlash: false
+    notifier-add-api:
+      addPrefix:
+        prefix: /api
+    central-auth-strip:
+      stripPrefix:
+        prefixes:
+          - /unicron/auth
+        forceSlash: false
+    otel-strip:
+      stripPrefix:
+        prefixes:
+          - /otel
+
+  services:
+    backend-service:
+      loadBalancer:
+        passHostHeader: true
+        servers:
+          - url: 'http://127.0.0.1:8000'
+        sticky:
+          cookie:
+            name: unicron-backend
+            secure: true
+            sameSite: none
+    frontend-service:
+      loadBalancer:
+        passHostHeader: true
+        servers:
+          - url: 'http://127.0.0.1:5173'
+        sticky:
+          cookie:
+            name: unicron-frontend
+            secure: true
+            sameSite: none
+    victoria-metrics-service:
+      loadBalancer:
+        passHostHeader: true
+        servers:
+          - url: 'http://127.0.0.1:8428'
+    victoria-logs-service:
+      loadBalancer:
+        passHostHeader: true
+        servers:
+          - url: 'http://127.0.0.1:9428'
+    otel-collector-http-service:
+      loadBalancer:
+        passHostHeader: true
+        servers:
+          - url: 'http://127.0.0.1:4318'
+    alert-engine-service:
+      loadBalancer:
+        passHostHeader: true
+        servers:
+          - url: 'http://127.0.0.1:8011'
+    notifier-service:
+      loadBalancer:
+        passHostHeader: true
+        servers:
+          - url: 'http://127.0.0.1:8012'
+    central-auth-service:
+      loadBalancer:
+        passHostHeader: true
+        servers:
+          - url: 'http://127.0.0.1:3020'
+
+  routers:
+    victoria-logs-mtls:
+      rule: '({{HOSTS_OR_RULES}}) && PathPrefix(`/unicron/victoria-logs`)'
+      entryPoints: ['mtls']
+      service: victoria-logs-service@file
+      middlewares:
+        - unicron-strip@file
+        - victoria-logs-strip@file
+        - pass-client-cert@file
+      tls:
+        options: mtls@file
+      priority: 100
+
+    victoria-metrics-mtls:
+      rule: '({{HOSTS_OR_RULES}}) && PathPrefix(`/unicron/victoria-metrics`)'
+      entryPoints: ['mtls']
+      service: victoria-metrics-service@file
+      middlewares:
+        - unicron-strip@file
+        - victoria-metrics-strip@file
+        - pass-client-cert@file
+      tls:
+        options: mtls@file
+      priority: 95
+
+    otel-collector-mtls:
+      rule: '({{HOSTS_OR_RULES}}) && PathPrefix(`/unicron/otel`)'
+      entryPoints: ['mtls']
+      service: otel-collector-http-service@file
+      middlewares:
+        - unicron-strip@file
+        - otel-strip@file
+        - pass-client-cert@file
+      tls:
+        options: mtls@file
+      priority: 85
+
+    backend-mtls-sio:
+      rule: '({{HOSTS_OR_RULES}}) && PathPrefix(`/unicron/api/socket.io`)'
+      entryPoints: ['mtls']
+      service: backend-service@file
+      middlewares:
+        - unicron-strip@file
+        - pass-client-cert@file
+      tls:
+        options: mtls@file
+      priority: 80
+
+    backend-mtls:
+      rule: '({{HOSTS_OR_RULES}}) && PathPrefix(`/unicron`)'
+      entryPoints: ['mtls']
+      service: backend-service@file
+      middlewares:
+        - unicron-strip@file
+        - pass-client-cert@file
+      tls:
+        options: mtls@file
+      priority: 75
+
+    alert-engine-api:
+      rule: '({{HOSTS_OR_RULES}}) && PathPrefix(`/unicron/api/alert-engine`)'
+      entryPoints: ['websecure']
+      service: alert-engine-service@file
+      middlewares:
+        - alert-engine-strip@file
+        - alert-engine-add-api@file
+      tls:
+        options: default
+      priority: 60
+
+    notifier-api:
+      rule: '({{HOSTS_OR_RULES}}) && PathPrefix(`/unicron/api/notifier`)'
+      entryPoints: ['websecure']
+      service: notifier-service@file
+      middlewares:
+        - notifier-strip@file
+        - notifier-add-api@file
+      tls:
+        options: default
+      priority: 58
+
+    central-auth:
+      rule: '({{HOSTS_OR_RULES}}) && PathPrefix(`/unicron/auth`)'
+      entryPoints: ['websecure']
+      service: central-auth-service@file
+      middlewares:
+        - central-auth-strip@file
+      tls:
+        options: default
+      priority: 57
+
+    backend-api:
+      rule: '({{HOSTS_OR_RULES}}) && PathPrefix(`/unicron/api`)'
+      entryPoints: ['websecure']
+      service: backend-service@file
+      middlewares:
+        - unicron-strip@file
+      tls:
+        options: default
+      priority: 50
+
+    frontend-web:
+      rule: '({{HOSTS_OR_RULES}}) && PathPrefix(`/unicron`)'
+      entryPoints: ['websecure']
+      service: frontend-service@file
+      tls:
+        options: default
+      priority: 10

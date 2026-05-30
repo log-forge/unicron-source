@@ -1,0 +1,124 @@
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+{{if .ScrapeMetricsEnabled}}
+  hostmetrics:
+    collection_interval: 10s
+    root_path: /host/root
+    scrapers:
+      cpu: {}
+      disk: {}
+      filesystem: {}
+      load: {}
+      memory: {}
+      network: {}
+      paging: {}
+      # processes: {}
+      # process:
+      #   include:
+      #     match_type: regexp
+      #     names: ['.*']
+      system: {}
+  docker_stats:
+    endpoint: 'unix:///var/run/docker.sock'
+    api_version: '1.44'
+    collection_interval: 10s
+{{end}}
+
+processors:
+  resourcedetection:
+    detectors: [env, system, docker]
+    system:
+      hostname_sources: [os]
+    override: false
+  resource/herald:
+    attributes:
+      - action: upsert
+        key: herald_name
+        value: ${HERALD_NAME}
+      - action: upsert
+        key: herald_id
+        value: ${HERALD_ID}
+      - action: upsert
+        key: herald_env
+        value: ${ENVIRONMENT}
+      - action: upsert
+        key: service_namespace
+        value: unicron_herald
+      - action: upsert
+        key: service_name
+        value: ${HERALD_NAME}
+      - action: upsert
+        key: service_instance_id
+        value: ${HERALD_ID}
+  # Convert delta temporality metrics to cumulative for VictoriaMetrics
+  # VictoriaMetrics does not support delta temporality metrics
+  deltatocumulative:
+    max_stale: 5m
+  transform/container_key:
+    metric_statements:
+      - context: resource
+        statements:
+          - set(attributes["container_name"], attributes["container.name"]) where attributes["container_name"] == nil and attributes["container.name"] != nil
+          - set(attributes["service_name"], attributes["service.name"]) where attributes["service_name"] == nil and attributes["service.name"] != nil
+          - set(attributes["container_key"], Concat([attributes["herald_id"], attributes["container_name"]], ":")) where attributes["container_key"] == nil and attributes["herald_id"] != nil and attributes["container_name"] != nil
+  batch:
+    send_batch_size: 2048
+    timeout: 1s
+
+exporters:
+  otlphttp/central:
+    endpoint: ${CENTRAL_MTLS_URL}/unicron/otel
+    compression: gzip
+    tls:
+      ca_file: ${HERALD_CA_ROOT}
+      cert_file: ${HERALD_CERT}
+      key_file: ${HERALD_KEY}
+      insecure: false
+    retry_on_failure:
+      enabled: true
+      initial_interval: 3s
+      max_interval: 30s
+      max_elapsed_time: 0
+    sending_queue:
+      enabled: true
+      num_consumers: 2
+      queue_size: {{.OTelQueueSize}}
+{{if .DurableQueue}}
+      storage: file_storage
+{{end}}
+
+extensions:
+  health_check: {}
+  memory_limiter:
+    check_interval: 5s
+    limit_mib: 256
+    spike_limit_mib: 64
+{{if .DurableQueue}}
+  file_storage:
+    directory: /var/lib/otelcol/queue
+    timeout: 10s
+    compaction:
+      on_start: true
+      directory: /var/lib/otelcol/queue
+      max_transaction_size: 65536
+{{end}}
+
+service:
+  extensions: [health_check, memory_limiter{{if .DurableQueue}}, file_storage{{end}}]
+  telemetry:
+    metrics:
+      level: none
+  pipelines:
+    metrics:
+      receivers: [{{if .PushMetricsEnabled}}otlp{{if .ScrapeMetricsEnabled}}, {{end}}{{end}}{{if .ScrapeMetricsEnabled}}hostmetrics, docker_stats{{end}}]
+      processors: [resourcedetection, resource/herald, transform/container_key, deltatocumulative, batch]
+      exporters: [otlphttp/central]
+    logs:
+      receivers: [otlp]
+      processors: [resourcedetection, resource/herald, batch]
+      exporters: [otlphttp/central]

@@ -1,0 +1,32 @@
+# Development overrides for alerting infrastructure
+# Use with: docker compose -f docker-compose.unicron.yaml -f docker-compose.alerting.yml -f docker-compose.alerting.dev.yml up
+
+services:
+  redis:
+    ports:
+      - "6379:6379"
+    environment:
+      # Enable debug logging in dev
+      REDIS_ARGS: "--loglevel verbose"
+
+  # Flower for Celery monitoring (future use in Phase 4)
+  flower:
+    image: mher/flower:2.0
+    container_name: unicron-flower
+    restart: unless-stopped
+    command: celery flower --port=5555
+    environment:
+      CELERY_BROKER_URL: redis://redis:6379/1
+    ports:
+      - "5555:5555"
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - unicron-network
+    profiles:
+      - celery
+
+networks:
+  unicron-network:
+    external: true

@@ -1,0 +1,7 @@
+{{ message }}
+{% if ai_summary %}
+AI: {{ ai_summary }}
+{% endif %}
+Rule: {{ rule_name }} | {{ severity | upper }}
+{% if context %}{% for key, value in context.items() %}{{ key }}: {{ value }}
+{% endfor %}{% endif %}

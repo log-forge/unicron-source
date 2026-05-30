@@ -1,0 +1,17 @@
+{{ message }}
+{% if ai_summary %}
+
+:robot_face: *AI Analysis:*
+{{ ai_summary }}
+{% endif %}
+
+- *Rule:* {{ rule_name }}
+- *Severity:* {{ severity }}
+- *Time:* {{ triggered_at }}
+{% if context %}
+
+*Context:*
+{% for key, value in context.items() %}
+- {{ key }}: `{{ value }}`
+{% endfor %}
+{% endif %}

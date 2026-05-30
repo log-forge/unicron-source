@@ -1,0 +1,74 @@
+.DEFAULT_GOAL := help
+SHELL := /usr/bin/env bash
+
+DOCKER ?= docker
+COMPOSE ?= $(DOCKER) compose
+
+DEMO_COMPOSE_FILE ?= ops/demo/docker-compose.demo.yaml
+DEMO_FLUENTD_ADDRESS ?= 127.0.0.1:24224
+DEMO_COMPOSE = DEMO_FLUENTD_ADDRESS=$(DEMO_FLUENTD_ADDRESS) $(COMPOSE) -f $(DEMO_COMPOSE_FILE)
+DEMO_TRIGGER_STATE_DIR ?= /tmp/unicron-demo
+DEMO_TRIGGER_BURST_COUNT ?= 5
+
+.PHONY: \
+	help \
+	demo-up \
+	demo-down \
+	demo-trigger-log \
+	demo-trigger-log-error \
+	demo-trigger-log-warning \
+	demo-trigger-log-burst \
+	demo-start-event-target \
+	demo-stop-event-target \
+	demo-restart-event-target \
+
+help: ## Show demo targets
+	@echo "Usage: make -f Makefile.demo <target>"
+	@echo ""
+	@awk -F':.*## ' '/^[a-zA-Z0-9._-]+:.*##/ { printf "  \033[36m%-28s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
+
+demo-up: ## Start the isolated demo stack
+	@echo ""
+	@echo "Starting isolated demo stack on unicron-demo-network with fluentd logs to $(DEMO_FLUENTD_ADDRESS)..."
+	@$(DEMO_COMPOSE) up -d --remove-orphans
+	@echo "Demo stack is up."
+
+demo-down: ## Stop and remove the isolated demo stack
+	@echo ""
+	@echo "Stopping isolated demo stack..."
+	@$(DEMO_COMPOSE) down --remove-orphans || true
+
+demo-trigger-log: ## Emit the main remediation keyword from unicron-demo-rule-worker
+	@echo ""
+	@echo "Emitting DEMO_FLOW_TRIGGER from unicron-demo-rule-worker..."
+	@$(DOCKER) exec unicron-demo-rule-worker sh -lc 'mkdir -p $(DEMO_TRIGGER_STATE_DIR) && touch $(DEMO_TRIGGER_STATE_DIR)/emit-main'
+
+demo-trigger-log-error: ## Emit a predefined error-pattern log from unicron-demo-rule-worker
+	@echo ""
+	@echo "Emitting predefined error-pattern log from unicron-demo-rule-worker..."
+	@$(DOCKER) exec unicron-demo-rule-worker sh -lc 'mkdir -p $(DEMO_TRIGGER_STATE_DIR) && touch $(DEMO_TRIGGER_STATE_DIR)/emit-error'
+
+demo-trigger-log-warning: ## Emit a predefined warning-pattern log from unicron-demo-rule-worker
+	@echo ""
+	@echo "Emitting predefined warning-pattern log from unicron-demo-rule-worker..."
+	@$(DOCKER) exec unicron-demo-rule-worker sh -lc 'mkdir -p $(DEMO_TRIGGER_STATE_DIR) && touch $(DEMO_TRIGGER_STATE_DIR)/emit-warning'
+
+demo-trigger-log-burst: ## Emit a burst of the main remediation keyword from unicron-demo-rule-worker
+	@echo ""
+	@echo "Emitting burst of $(DEMO_TRIGGER_BURST_COUNT) trigger logs from unicron-demo-rule-worker..."
+	@$(DOCKER) exec unicron-demo-rule-worker sh -lc 'mkdir -p $(DEMO_TRIGGER_STATE_DIR) && printf "%s" "$(DEMO_TRIGGER_BURST_COUNT)" > $(DEMO_TRIGGER_STATE_DIR)/emit-burst-count && touch $(DEMO_TRIGGER_STATE_DIR)/emit-burst'
+
+demo-start-event-target: ## Start the demo event target to produce a container start event
+	@echo ""
+	@echo "Starting demo event target..."
+	@$(DEMO_COMPOSE) start demo-event-target
+
+demo-stop-event-target: ## Stop the demo event target to produce a container stop event
+	@echo ""
+	@echo "Stopping demo event target..."
+	@$(DEMO_COMPOSE) stop demo-event-target
+
+demo-restart-event-target: ## Restart the demo event target to produce stop/start events
+	@echo ""
+	@echo "Restarting demo event target..."
+	@$(DEMO_COMPOSE) restart demo-event-target

@@ -1,0 +1,123 @@
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  memory_limiter:
+    check_interval: 5s
+    limit_mib: 1024
+    spike_limit_mib: 256
+  # static tag for the collector
+  resource:
+    attributes:
+      - key: collector_role
+        action: upsert
+        value: central
+  transform/logs_prepare:
+    log_statements:
+      - context: log
+        statements:
+          - set(attributes["msg"], body)
+  batch:
+    send_batch_size: 4000
+    timeout: 1s
+
+exporters:
+  # Grafana Tempo (traces) — keep retry + persisted queue (file_storage)
+  # otlp/tempo:
+  #   endpoint: http://tempo:4318
+  #   retry_on_failure:
+  #     enabled: true
+  #     initial_interval: 5s
+  #     max_interval: 30s
+  #     max_elapsed_time: 0
+  #   compression: gzip
+  #   sending_queue:
+  #     enabled: true
+  #     num_consumers: 4
+  #     queue_size: 50000
+  #     storage: file_storage
+  # VictoriaMetrics (Prometheus remote write) — keep retry and use resource->label conversion
+  prometheusremotewrite/victoria:
+    endpoint: http://unicron-victoria-metrics:8428/api/v1/write
+    retry_on_failure:
+      enabled: true
+      initial_interval: 5s
+      max_interval: 30s
+      max_elapsed_time: 0
+    resource_to_telemetry_conversion:
+      enabled: true
+  otlphttp/victoria_logs:
+    logs_endpoint: http://unicron-victoria-logs:9428/insert/opentelemetry/v1/logs
+    headers:
+      VL-Stream-Fields: herald_id,container_key
+      VL-Msg-Field: msg
+    retry_on_failure:
+      enabled: true
+      initial_interval: 5s
+      max_interval: 30s
+      max_elapsed_time: 0
+    sending_queue:
+      enabled: true
+      num_consumers: 4
+      queue_size: 10000
+      storage: file_storage
+  otlphttp/backend_log_intake:
+    logs_endpoint: http://unicron-backend:8000/internal/logs/otlp/v1/logs
+    compression: none
+    headers:
+      X-Internal-Secret: ${env:INTERNAL_API_SECRET}
+    retry_on_failure:
+      enabled: true
+      initial_interval: 5s
+      max_interval: 30s
+      max_elapsed_time: 0
+    sending_queue:
+      enabled: true
+      num_consumers: 4
+      queue_size: 10000
+      storage: file_storage
+extensions:
+  # Expose an HTTP health endpoint for Docker/Orchestrator probing.
+  # See GH issue: https://github.com/open-telemetry/opentelemetry-collector-contrib/issues/30798
+  # The busybox-based custom image provides 'wget' used by docker compose healthcheck.
+  health_check:
+    endpoint: 0.0.0.0:13133 # default; explicit for clarity
+    path: /healthz # default path; kept explicit for future edits
+  file_storage:
+    directory: /var/lib/otelcol/storage
+    create_directory: true
+    timeout: 10s
+    compaction:
+      on_start: true
+      directory: /var/lib/otelcol/storage
+      max_transaction_size: 65536
+
+service:
+  extensions: [file_storage, health_check]
+  telemetry:
+    metrics:
+      level: basic
+      readers:
+        - pull:
+            exporter:
+              prometheus:
+                host: 0.0.0.0
+                port: 8888
+  pipelines:
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, resource, batch]
+      exporters: [prometheusremotewrite/victoria]
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, resource, transform/logs_prepare, batch]
+      exporters: [otlphttp/victoria_logs, otlphttp/backend_log_intake]
+    # traces:
+    #   receivers: [otlp]
+    #   processors: [memory_limiter, resource, batch]
+    #   exporters: [otlp/tempo]

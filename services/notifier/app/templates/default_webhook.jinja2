@@ -1,0 +1,10 @@
+{
+  "title": "{{ title }}",
+  "message": "{{ message }}",
+  "severity": "{{ severity }}",
+  "rule_name": "{{ rule_name }}",
+  "triggered_at": "{{ triggered_at }}",
+  "alert_id": "{{ alert_id }}",
+  {% if ai_summary %}"ai_summary": "{{ ai_summary }}",{% endif %}
+  "context": {{ context | tojson }}
+}

@@ -1,0 +1,7 @@
+services:
+  traefik:
+    environment:
+      # Restrict routers to your public DNS names in production.
+      TRAEFIK_ROUTER_HOSTS: '${TRAEFIK_ROUTER_HOSTS:?TRAEFIK_ROUTER_HOSTS is required}'
+      # Disable vendor telemetry UIs on the public browser entrypoint.
+      TRAEFIK_EXPOSE_VICTORIA_UI: '${TRAEFIK_EXPOSE_VICTORIA_UI:-false}'

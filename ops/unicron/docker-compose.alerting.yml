@@ -1,0 +1,52 @@
+# Alerting infrastructure services
+# Use with: docker compose -f docker-compose.unicron.yaml -f docker-compose.alerting.yml up
+
+services:
+  # Redis for caching, rate limiting, Socket.IO scaling, and Streams
+  redis:
+    image: redis:7.4-alpine
+    container_name: unicron-redis
+    restart: unless-stopped
+    command: >
+      redis-server
+      --appendonly yes
+      --maxmemory 512mb
+      --maxmemory-policy allkeys-lru
+      --tcp-keepalive 60
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - unicron-network
+
+  # Redis Commander for debugging (dev only)
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: unicron-redis-commander
+    restart: unless-stopped
+    environment:
+      REDIS_HOSTS: local:redis:6379
+    ports:
+      - "8081:8081"
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - unicron-network
+    profiles:
+      - dev
+
+volumes:
+  redis_data:
+    name: unicron-redis-data
+    driver: local
+
+networks:
+  unicron-network:
+    external: true

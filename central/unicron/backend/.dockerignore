@@ -1,0 +1,57 @@
+# VCS
+.git
+.gitignore
+
+# Python caches (recursively, including )
+**/__pycache__/
+**/*.py[cod]
+**/*.pyo
+
+# Virtualenv & envfile
+.venv/
+.env
+.venv/
+.env
+
+# Python build outputs
+build/
+dist/
+*.egg-info/
+build/
+dist/
+*.egg-info/
+
+# Python test & type-check caches
+.pytest_cache/
+.mypy_cache/
+.coverage
+coverage.*
+htmlcov/
+.tox/
+.nox/
+.cache/
+*.cover
+*.log
+.pytest_cache/
+.mypy_cache/
+.coverage
+coverage.*
+htmlcov/
+.tox/
+.nox/
+.cache/
+*.cover
+*.log
+
+# Editor/IDE
+.vscode/
+.idea/
+*.swp
+
+# Docker
+Dockerfile
+docker-compose.yml
+
+# OS files
+.DS_Store
+Thumbs.db

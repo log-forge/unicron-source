@@ -1,0 +1,99 @@
+# OS / editor junk
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+*.iml
+
+# Secrets / local env
+.env
+.env.*
+!.env.example
+!.env.sample
+!.env.template
+!.env.production.example
+.envrc
+.direnv/
+
+# OAuth / third-party client secrets
+client_secret*.json
+
+# Local dev certs / keys
+unicron-localhost-leaf.crt
+unicron-localhost-leaf.key
+unicron-root_ca.crt
+*.crt
+*.key
+*.pem
+*.p12
+*.pfx
+*.jks
+
+# Ops secrets (mounted into containers)
+ops/unicron/ca/step-ca-password.txt
+ops/unicron/ca/step-ca-provisioner-password.txt
+ops/unicron/ca/step-ca-ra-password.txt
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# Node / TS
+node_modules/
+*.tsbuildinfo
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+dist/
+build/
+out/
+.cache/
+.turbo/
+.next/
+.vite/
+.react-router/
+coverage/
+
+# Misc
+*.log
+logs/
+*.tmp
+*.bak
+*.orig
+*.rej
+
+# Local audit artifacts
+/.workspace-files*.txt
+
+# Local planning scratch files
+.agents/
+.claude/
+.codex/
+.planning/
+.tmp/
+cloud/
+lib/
+packages/
+tests/
+
+# Local playwrite artifacts
+.playwright-mcp/
+
+# Local deprecated frontend snapshot (do not track)
+central/unicron/frontend (deprecated)/

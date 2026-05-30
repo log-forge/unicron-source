@@ -1,0 +1,63 @@
+name: unicron-dind
+
+services:
+  unicron-remote-dind:
+    image: docker:25.0-dind
+    container_name: unicron-remote-dind
+    restart: unless-stopped
+    privileged: true
+    environment:
+      DOCKER_TLS_CERTDIR: '' # disable TLS for local dev; exposes 2375
+    ports:
+      - '2375:2375' # plain Docker API (no auth; local dev only!)
+    volumes:
+      - unicron-dind-data:/var/lib/docker
+    networks:
+      - unicron-dind-net
+    # Provide synthetic internal FQDN(s) so remote heralds inside dind can
+    # resolve the central stack without using curl --resolve.
+    # Format is hostname:IP. We use docker-compose variable interpolation with
+    # defaults so it still works if vars are absent.
+    extra_hosts:
+      - '${UNICRON_CENTRAL_FQDN:-unicron.central}:host-gateway'
+      # Optional additional alias (uncomment if you want a traefik.* name):
+      # - "traefik.${UNICRON_CENTRAL_FQDN:-unicron.central}:host-gateway"
+    command: ['--insecure-registry=registry:5000']
+    healthcheck:
+      test: ['CMD', 'docker', 'info']
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+
+  registry:
+    image: registry
+    container_name: unicron-registry
+    restart: unless-stopped
+    ports:
+      - '5000:5000'
+    volumes:
+      - registry-data:/var/lib/registry
+    environment:
+      - DOCKER_CLI_EXPERIMENTAL=enabled
+    networks:
+      - unicron-dind-net
+    healthcheck:
+      # Busybox wget is available; /v2/ must return 200 or 401 (both mean registry is listening)
+      test:
+        [
+          'CMD-SHELL',
+          'wget -q --spider http://localhost:5000/v2/ >/dev/null 2>&1 || exit 1',
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 5s
+
+volumes:
+  unicron-dind-data:
+  registry-data:
+
+networks:
+  unicron-dind-net:
+    driver: bridge

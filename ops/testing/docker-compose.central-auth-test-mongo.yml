@@ -1,0 +1,27 @@
+services:
+  central-auth-test-mongodb:
+    image: mongo:7
+    container_name: unicron-central-auth-test-mongodb
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${CENTRAL_AUTH_TEST_MONGO_PORT:-27018}:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${CENTRAL_AUTH_TEST_MONGO_ROOT_USERNAME:-root}
+      MONGO_INITDB_ROOT_PASSWORD: ${CENTRAL_AUTH_TEST_MONGO_ROOT_PASSWORD:-password}
+      MONGO_INITDB_DATABASE: ${CENTRAL_AUTH_TEST_MONGODB_DB_NAME:-central_auth_test}
+    volumes:
+      - central-auth-test-mongo-data:/data/db
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "mongosh --quiet --username \"$${MONGO_INITDB_ROOT_USERNAME}\" --password \"$${MONGO_INITDB_ROOT_PASSWORD}\" --authenticationDatabase admin --eval \"db.adminCommand('ping').ok\"",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+
+volumes:
+  central-auth-test-mongo-data:
+    name: unicron-central-auth-test-mongo-data

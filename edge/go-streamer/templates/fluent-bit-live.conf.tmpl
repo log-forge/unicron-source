@@ -1,0 +1,38 @@
+[SERVICE]
+    Flush         {{.FlushSeconds}}
+    Log_Level     info
+    HTTP_Server   On
+    HTTP_Listen   0.0.0.0
+    HTTP_Port     {{.HTTPPort}}
+    Hot_Reload    On
+    storage.path  {{.StoragePath}}
+    storage.sync  normal
+
+{{if .HasTailInputs}}
+{{- range .Containers}}
+[INPUT]
+    Name                              tail
+    Path                              {{.LogPath}}
+    Tag                               docker.{{.Name}}
+    Docker_Mode                       On
+    Path_Key                          path
+    DB                                {{$.TailDBPath}}
+    Refresh_Interval                  5
+    Skip_Long_Lines                   On
+    Mem_Buf_Limit                     {{$.MemBufLimit}}
+    storage.type                      filesystem
+    Read_from_Head                    false
+
+{{end -}}
+{{end}}
+[OUTPUT]
+    Name                 http
+    Match                *
+    Host                 127.0.0.1
+    Port                 {{.OutputPort}}
+    workers              {{.OutputWorkers}}
+    uri                  {{.OutputPath}}
+    format               json_lines
+    header_tag           FLUENT-TAG
+    json_date_key        timestamp
+    json_date_format     iso8601

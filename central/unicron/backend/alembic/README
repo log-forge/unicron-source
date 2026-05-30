@@ -1,0 +1,30 @@
+Generic single-database configuration.
+
+---
+
+# Alembic Migration Instructions with Docker Compose
+
+## Local Development
+
+1. Start Postgres using Docker Compose:
+   ```sh
+   docker compose up -d  # or use 'make central-up'
+   ```
+2. Wait for the Postgres container to be ready (check with `docker ps` or logs).
+3. Run Alembic migrations from your backend directory:
+   ```sh
+   alembic upgrade head
+   ```
+
+## CI/CD Pipeline
+
+- After starting your Postgres service (e.g., with Compose), add a step to run Alembic migrations before starting your backend app or running tests:
+  ```sh
+  alembic upgrade head
+  ```
+
+## Notes
+
+- Ensure your `sqlalchemy.url` in `.env` or `alembic.ini` points to the Postgres service as seen from where you run Alembic (e.g., `postgresql+psycopg2://user:password@postgres:5432/dbname`).
+- Always use the sync driver (`+psycopg2`) for Alembic migrations.
+- Repeat the migration process (`alembic revision --autogenerate ...` and `alembic upgrade head`) after any model/schema change.

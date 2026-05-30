@@ -1,0 +1,75 @@
+name: unicron-demo
+
+x-push-logging: &push_logging
+  driver: fluentd
+  options:
+    fluentd-address: "${DEMO_FLUENTD_ADDRESS:-127.0.0.1:24224}"
+    fluentd-async: "true"
+    fluentd-async-reconnect-interval: "2s"
+    fluentd-sub-second-precision: "true"
+    tag: "app.{{.Name}}"
+
+x-push-defaults: &push_defaults
+  labels:
+    unicron.telemetry.mode: "push"
+  logging: *push_logging
+
+services:
+  demo-rule-worker:
+    <<: *push_defaults
+    image: python:3.12-alpine
+    container_name: unicron-demo-rule-worker
+    restart: unless-stopped
+    command: ["python", "-u", "/demo/rule_worker.py"]
+    environment:
+      DEMO_STATE_DIR: /tmp/unicron-demo
+      NORMAL_INTERVAL_SECONDS: "15"
+    volumes:
+      - ./rule_worker.py:/demo/rule_worker.py:ro
+    networks:
+      - demo-network
+
+  demo-metrics:
+    <<: *push_defaults
+    image: python:3.12-alpine
+    container_name: unicron-demo-metrics
+    restart: unless-stopped
+    command: ["python", "-u", "/demo/metrics_worker.py"]
+    environment:
+      MEMORY_ALLOC_MB: "24"
+      METRICS_INTERVAL_SECONDS: "12"
+      TARGET_URL: "http://unicron-demo-web:8080/healthz"
+    volumes:
+      - ./metrics_worker.py:/demo/metrics_worker.py:ro
+    depends_on:
+      demo-web:
+        condition: service_started
+    networks:
+      - demo-network
+
+  demo-web:
+    <<: *push_defaults
+    image: nginx:1.27-alpine
+    container_name: unicron-demo-web
+    restart: unless-stopped
+    volumes:
+      - ./nginx-demo.conf:/etc/nginx/conf.d/default.conf:ro
+    networks:
+      - demo-network
+
+  demo-event-target:
+    <<: *push_defaults
+    image: alpine:3.20
+    container_name: unicron-demo-event-target
+    restart: unless-stopped
+    command: ["/bin/sh", "/demo/event_target.sh"]
+    environment:
+      HEARTBEAT_INTERVAL_SECONDS: "10"
+    volumes:
+      - ./event_target.sh:/demo/event_target.sh:ro
+    networks:
+      - demo-network
+
+networks:
+  demo-network:
+    name: unicron-demo-network

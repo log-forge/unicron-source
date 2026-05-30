@@ -1,0 +1,351 @@
+tls:
+  certificates:
+    - certFile: '/ca/certs/unicron-traefik-leaf.crt'
+      keyFile: '/ca/certs/unicron-traefik-leaf.key'
+  stores:
+    default:
+      defaultCertificate:
+        certFile: '/ca/certs/unicron-traefik-leaf.crt'
+        keyFile: '/ca/certs/unicron-traefik-leaf.key'
+  options:
+    default:
+      minVersion: VersionTLS12
+      cipherSuites:
+        - TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384
+        - TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+    mtls:
+      clientAuth:
+        caFiles:
+          - '/ca/certs/root_ca.crt'
+        clientAuthType: RequireAndVerifyClientCert
+
+http:
+  middlewares:
+    pass-client-cert:
+      passTLSClientCert:
+        pem: true
+        info:
+          subject:
+            commonName: true
+            organization: true
+          serialNumber: true
+          sans: true
+    victoria-metrics-strip:
+      stripPrefix:
+        prefixes:
+          - /victoria-metrics
+    victoria-logs-strip:
+      stripPrefix:
+        prefixes:
+          - /victoria-logs
+    grafana-tempo-strip:
+      stripPrefix:
+        prefixes:
+          - /grafana-tempo
+    unicron-strip:
+      stripPrefix:
+        prefixes:
+          - /unicron
+    unicron-test-strip:
+      stripPrefix:
+        prefixes:
+          - /unicron/test
+    alert-engine-strip:
+      stripPrefix:
+        prefixes:
+          - /unicron/api/alert-engine
+        forceSlash: false
+    alert-engine-add-api:
+      addPrefix:
+        prefix: /api
+    notifier-strip:
+      stripPrefix:
+        prefixes:
+          - /unicron/api/notifier
+        forceSlash: false
+    central-auth-strip:
+      stripPrefix:
+        prefixes:
+          - /unicron/auth
+        forceSlash: false
+    notifier-add-api:
+      addPrefix:
+        prefix: /api
+    otel-strip:
+      stripPrefix:
+        prefixes:
+          - /otel
+
+  services:
+    test-backend-service:
+      loadBalancer:
+        passHostHeader: true
+        servers:
+          - url: 'http://unicron-test-backend:8000'
+        # Enable sticky sessions using a cookie so Engine.IO handshakes/long-polling
+        # stay bound to the same backend instance. Helpful when not forcing WS.
+        sticky:
+          cookie:
+            name: unicron-test-backend
+            secure: true
+            sameSite: none
+    backend-service:
+      loadBalancer:
+        passHostHeader: true
+        servers:
+          - url: 'http://unicron-backend:8000'
+        # Enable sticky sessions using a cookie so Engine.IO handshakes/long-polling
+        # stay bound to the same backend instance. Helpful when not forcing WS.
+        sticky:
+          cookie:
+            name: unicron-backend
+            secure: true
+            sameSite: none
+    frontend-service:
+      loadBalancer:
+        passHostHeader: true
+        servers:
+          - url: 'http://unicron-frontend:5173'
+        # Frontend can also use sticky cookies if you serve stateful frontends
+        # behind Traefik; leave enabled for safety.
+        sticky:
+          cookie:
+            name: unicron-frontend
+            secure: true
+            sameSite: none
+    victoria-metrics-service:
+      loadBalancer:
+        passHostHeader: true
+        servers:
+          - url: 'http://unicron-victoria-metrics:8428'
+    victoria-logs-service:
+      loadBalancer:
+        passHostHeader: true
+        servers:
+          - url: 'http://unicron-victoria-logs:9428'
+    grafana-tempo-grpc-service:
+      loadBalancer:
+        passHostHeader: true
+        servers:
+          - url: 'h2c://unicron-tempo:4317'
+    grafana-tempo-http-service:
+      loadBalancer:
+        passHostHeader: true
+        servers:
+          - url: 'http://unicron-tempo:4318'
+    grafana-tempo-ui-service:
+      loadBalancer:
+        passHostHeader: true
+        servers:
+          - url: 'http://unicron-tempo:3200'
+    otel-collector-grpc-service:
+      loadBalancer:
+        passHostHeader: true
+        servers:
+          - url: 'h2c://unicron-otel-collector:4317'
+    otel-collector-http-service:
+      loadBalancer:
+        passHostHeader: true
+        servers:
+          - url: 'http://unicron-otel-collector:4318'
+    alert-engine-service:
+      loadBalancer:
+        passHostHeader: true
+        servers:
+          - url: 'http://unicron-alert-engine:8000'
+    notifier-service:
+      loadBalancer:
+        passHostHeader: true
+        servers:
+          - url: 'http://unicron-notifier:8000'
+    central-auth-service:
+      loadBalancer:
+        passHostHeader: true
+        servers:
+          - url: 'http://central-auth:3020'
+
+  routers:
+    # Test whoami endpoint over mtls (requires client cert)
+    test-whoami-mtls:
+      # Include Host-based variant so SNI hostnames trigger early TLS option selection, while still allowing pure path access.
+      rule: '({{HOSTS_OR_RULES}}) && PathPrefix(`/unicron/test`)'
+      entryPoints: ['mtls']
+      service: test-backend-service@file
+      middlewares:
+        - unicron-test-strip@file
+        - pass-client-cert@file
+      tls:
+        options: mtls@file
+      priority: 110
+
+    # Victoria Logs mTLS router
+    victoria-logs-mtls:
+      rule: '({{HOSTS_OR_RULES}}) && PathPrefix(`/unicron/victoria-logs`)'
+      entryPoints: ['mtls']
+      service: victoria-logs-service@file
+      middlewares:
+        - unicron-strip@file
+        - victoria-logs-strip@file
+        - pass-client-cert@file
+      tls:
+        options: mtls@file
+      # Highest of the mtls group so log ingestion is not shadowed
+      priority: 100
+
+    # Victoria Metrics mTLS router
+    victoria-metrics-mtls:
+      rule: '({{HOSTS_OR_RULES}}) && PathPrefix(`/unicron/victoria-metrics`)'
+      entryPoints: ['mtls']
+      service: victoria-metrics-service@file
+      middlewares:
+        - unicron-strip@file
+        - victoria-metrics-strip@file
+        - pass-client-cert@file
+      tls:
+        options: mtls@file
+      # Higher than backend-mtls so metrics traffic routes correctly
+      priority: 95
+
+    # Tempo OTLP mTLS router
+    grafana-tempo-mtls:
+      rule: '({{HOSTS_OR_RULES}}) && PathPrefix(`/unicron/grafana-tempo`)'
+      entryPoints: ['mtls']
+      service: grafana-tempo-grpc-service@file
+      middlewares:
+        - unicron-strip@file
+        - grafana-tempo-strip@file
+        - pass-client-cert@file
+      tls:
+        options: mtls@file
+      priority: 90
+
+    # Central OTel collector (metrics/traces) via /unicron/otel
+    otel-collector-mtls:
+      rule: '({{HOSTS_OR_RULES}}) && PathPrefix(`/unicron/otel`)'
+      entryPoints: ['mtls']
+      # Use HTTP (4318) so path prefix based routing (/v1/{traces,metrics,logs}) works for otlphttp exporters.
+      service: otel-collector-http-service@file
+      middlewares:
+        - unicron-strip@file
+        - otel-strip@file
+        - pass-client-cert@file
+      tls:
+        options: mtls@file
+      priority: 85
+
+    # Dedicated Socket.IO handshake router on mTLS
+    backend-mtls-sio:
+      rule: '({{HOSTS_OR_RULES}}) && PathPrefix(`/unicron/api/socket.io`)'
+      entryPoints: ['mtls']
+      service: backend-service@file
+      middlewares:
+        - unicron-strip@file
+        - pass-client-cert@file
+      tls:
+        options: mtls@file
+      priority: 80
+
+    # mTLS for Herald agents
+    backend-mtls:
+      rule: '({{HOSTS_OR_RULES}}) && PathPrefix(`/unicron`)'
+      entryPoints: ['mtls']
+      service: backend-service@file
+      middlewares:
+        - unicron-strip@file
+        - pass-client-cert@file
+      tls:
+        options: mtls@file
+      # Lower baseline priority so specialized victoria-* routers can override
+      priority: 75
+
+    # Test whoami endpoint over websecure (no client cert required)
+    test-whoami:
+      rule: '({{HOSTS_OR_RULES}}) && PathPrefix(`/unicron/test`)'
+      entryPoints: ['websecure']
+      service: test-backend-service@file
+      middlewares:
+        - unicron-test-strip@file
+      tls:
+        options: default
+      priority: 55
+
+    # Alert Engine API router
+    alert-engine-api:
+      rule: '({{HOSTS_OR_RULES}}) && PathPrefix(`/unicron/api/alert-engine`)'
+      entryPoints: ['websecure']
+      service: alert-engine-service@file
+      middlewares:
+        - alert-engine-strip@file
+        - alert-engine-add-api@file
+      tls:
+        options: default
+      priority: 60
+
+    # Notifier API router
+    notifier-api:
+      rule: '({{HOSTS_OR_RULES}}) && PathPrefix(`/unicron/api/notifier`)'
+      entryPoints: ['websecure']
+      service: notifier-service@file
+      middlewares:
+        - notifier-strip@file
+        - notifier-add-api@file
+      tls:
+        options: default
+      priority: 58
+
+    # Central Auth API router
+    central-auth:
+      rule: '({{HOSTS_OR_RULES}}) && PathPrefix(`/unicron/auth`)'
+      entryPoints: ['websecure']
+      service: central-auth-service@file
+      middlewares:
+        - central-auth-strip@file
+      tls:
+        options: default
+      priority: 57
+
+    # API router (higher priority so /api goes to backend)
+    backend-api:
+      rule: '({{HOSTS_OR_RULES}}) && PathPrefix(`/unicron/api`)'
+      entryPoints: ['websecure']
+      service: backend-service@file
+      middlewares:
+        - unicron-strip@file
+      tls:
+        options: default
+      priority: 50
+
+    # Short alias router: /fastdocs -> /docs on backend
+    backend-fastdocs:
+      rule: '({{HOSTS_OR_RULES}}) && (PathPrefix(`/unicron/fastdocs`) || PathPrefix(`/unicron/fastopenapi.json`))'
+      entryPoints: ['websecure']
+      service: backend-service@file
+      middlewares:
+        - unicron-strip@file
+      tls:
+        options: default
+      priority: 45
+
+    # Injected by entrypoint when TRAEFIK_EXPOSE_VICTORIA_UI=true.
+{{VICTORIA_UI_ROUTERS}}
+
+    # Tempo UI router
+    grafana-tempo-ui:
+      rule: '({{HOSTS_OR_RULES}}) && PathPrefix(`/unicron/grafana-tempo`)'
+      entryPoints: ['websecure']
+      service: grafana-tempo-ui-service@file
+      middlewares:
+        - unicron-strip@file
+        - grafana-tempo-strip@file
+      tls:
+        options: default
+      priority: 30
+
+    # Frontend app (fallback)
+    frontend-web:
+      rule: '({{HOSTS_OR_RULES}}) && PathPrefix(`/unicron`)'
+      entryPoints: ['websecure']
+      service: frontend-service@file
+      tls:
+        options: default
+      priority: 10

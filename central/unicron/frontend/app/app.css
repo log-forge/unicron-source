@@ -1,0 +1,41 @@
+@import "tailwindcss";
+@plugin "tailwindcss-react-aria-components";
+@import "./brand/theme.css";
+@import "./features/alert-engine/styles/alert-engine.css";
+
+@theme {
+  /* Font families */
+  --font-sans: "Segoe UI", -apple-system, "Inter", ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
+  --font-family-heading: var(--font-sans);
+  --font-family-body: var(--font-sans);
+}
+
+@source inline("{max-,min-,}{w,h}-{4xs,3xs,2xs,xs,sm,md,lg,xl,2xl,3xl,4xl,full}");
+@source inline("{inset,inset-x,inset-y,top,right,bottom,left}-{4xs,3xs,2xs,xs,sm,md,lg,xl,2xl,3xl,4xl}");
+@source inline("{p,m}{,x,y,t,r,b,l}-{4xs,3xs,2xs,xs,sm,md,lg,xl,2xl,3xl,4xl}");
+@source inline("{top,right,bottom,left}-{4xs,3xs,2xs,xs,sm,md,lg,xl,2xl,3xl,4xl}");
+@source inline("gap-{4xs,3xs,2xs,xs,sm,md,lg,xl,2xl,3xl,4xl}");
+@source inline("text-{h1,h2,h3,h4,h5,base,sm,xs,2xs}");
+@source inline("leading-{heading,body}");
+@source inline("rounded-{sm,md,lg,full}");
+@source inline("rounded-{t,b,l,r,tl,tr,br,bl}-{sm,md,lg,full}");
+@source inline("{bg,border,text,shadow}-{background,foreground,alt-background,alt-foreground,divider,primary,secondary,success,warning,error,info,neutral,text,success-text,warning-text,error-text,info-text,neutral-text,alt-text,highlight-text,shadow}{,/5,/10,/20,/30,/60,/70,/80,/100}");
+@source inline("{bg,border,text,shadow}-{primary,secondary,success,warning,error,info,neutral}-{50,{100..900..100},950}{,/5,/10,/20,/30,/60,/70,/80,/100}");
+
+html,
+body {
+  @apply bg-background font-sans text-text;
+  min-height: 100%;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+@layer base {
+  button,
+  [role="button"] {
+    cursor: pointer;
+  }
+}
+
+@custom-variant light (&:where([data-theme=light], [data-theme=light] *));
+@custom-variant dark (&:where([data-theme=dark], [data-theme=dark] *));
