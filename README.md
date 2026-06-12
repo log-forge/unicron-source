@@ -1,6 +1,6 @@
 # LogForge Unicron
 
-LogForge Unicron is source-available code from
+LogForge Unicron is Open Source code from
 https://github.com/log-forge/logforge for a local-first observability appliance
 for Docker hosts and container fleets. It packages a web UI, Central API, local
 admin auth, agent enrollment, telemetry ingest, alert evaluation, and
@@ -98,4 +98,4 @@ See [SECURITY.md](SECURITY.md).
 
 ## License
 
-LogForge Unicron Proprietary License. See [LICENSE](LICENSE).
+LogForge Unicron is Open Source. See [LICENSE](LICENSE).
