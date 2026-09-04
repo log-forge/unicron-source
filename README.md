@@ -44,8 +44,9 @@ docker compose -f deploy/standalone/docker-compose.yml up -d
 - Single-image appliance runtime for standalone deployment.
 - Local administrator auth with explicit recovery mode.
 - Central backend, React frontend, alert engine, notifier API, and notifier worker.
-- Postgres, MongoDB, Redis, Step CA/RA, Traefik, VictoriaMetrics, VictoriaLogs,
+- Postgres, Redis, Step CA/RA, Traefik, VictoriaMetrics, VictoriaLogs,
   and OTel collector inside the appliance.
+- Automatic migration of Central Auth data from older MongoDB-backed appliance volumes.
 - Agent enrollment through tokens and mTLS identity.
 - Browser and API ingress under `/unicron`.
 - Agent mTLS and OTLP ingress on port `8443`.

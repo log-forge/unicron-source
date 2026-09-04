@@ -1,0 +1,27 @@
+services:
+  central-auth-test-postgres:
+    image: postgres:15-alpine
+    container_name: unicron-central-auth-test-postgres
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${CENTRAL_AUTH_TEST_POSTGRES_PORT:-5433}:5432"
+    environment:
+      POSTGRES_USER: ${CENTRAL_AUTH_TEST_POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${CENTRAL_AUTH_TEST_POSTGRES_PASSWORD:-password}
+      POSTGRES_DB: ${CENTRAL_AUTH_TEST_POSTGRES_DB:-central_auth_test}
+    volumes:
+      - central-auth-test-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\"",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 5s
+
+volumes:
+  central-auth-test-postgres-data:
+    name: unicron-central-auth-test-postgres-data

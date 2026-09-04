@@ -1,12 +1,12 @@
 import { betterAuth, type Auth, type BetterAuthOptions } from 'better-auth';
 import { APIError, createAuthMiddleware } from 'better-auth/api';
-import { mongodbAdapter } from 'better-auth/adapters/mongodb';
+import { getMigrations } from 'better-auth/db/migration';
 import { username } from 'better-auth/plugins/username';
-import type { Db } from 'mongodb';
+import type { Pool } from 'pg';
 import { env } from '../config/env';
-import { getMongoDBClient } from '../db/mongoose';
+import { getAuthStore } from '../db/auth-store';
+import { getPostgresPool } from '../db/postgres';
 import { logger } from '../logging/logger';
-import { UserModel } from '../models/user.model';
 import { USERNAME_MAX, USERNAME_MIN, USERNAME_REGEX } from '../constants';
 import { NewPasswordInput } from '../schemas/password.schemas';
 import { normalizeUsername } from '../schemas/username.schemas';
@@ -43,12 +43,10 @@ export function getAuth() {
 }
 
 export interface CreateAuthOptions {
-  mongoDb?: Db;
+  postgresPool?: Pool;
 }
 
-export async function createAuth(options: CreateAuthOptions = {}): Promise<Auth<any>> {
-  const authDb = options.mongoDb ?? (await getMongoDBClient());
-
+export function buildAuthConfig(authDb: Pool): BetterAuthOptions {
   const trustedOrigins: BetterAuthOptions['trustedOrigins'] = async (request) => {
     if (!request) return Array.from(baseAllowedOrigins).filter((origin) => origin !== '*');
 
@@ -62,12 +60,12 @@ export async function createAuth(options: CreateAuthOptions = {}): Promise<Auth<
     return Array.from(new Set([normalized, ...Array.from(baseAllowedOrigins).filter((origin) => origin !== '*')]));
   };
 
-  const config = {
+  return {
     appName: 'Unicron Central Auth',
     baseURL: env.CENTRAL_AUTH_BASE_URL,
     basePath: '/api/auth',
     secret: env.CENTRAL_AUTH_SECRET,
-    database: mongodbAdapter(authDb, { client: authDb.client }),
+    database: authDb,
     logger: betterAuthLogger,
     onAPIError: {
       async onError(error) {
@@ -141,7 +139,7 @@ export async function createAuth(options: CreateAuthOptions = {}): Promise<Auth<
         if (ctx.path === '/change-password') {
           const userId = (ctx.context.session as any)?.user?.id ?? (ctx.context.session as any)?.session?.userId;
           if (userId) {
-            await UserModel.updateOne({ _id: userId }, { $set: { requiresPasswordChange: false } });
+            await getAuthStore().clearPasswordChangeRequirement(String(userId));
           }
         }
       }),
@@ -156,6 +154,18 @@ export async function createAuth(options: CreateAuthOptions = {}): Promise<Auth<
       }),
     ],
   } satisfies BetterAuthOptions;
+}
+
+export async function migrateAuthSchema(options: CreateAuthOptions = {}): Promise<void> {
+  const authDb = options.postgresPool ?? getPostgresPool();
+  const migration = await getMigrations(buildAuthConfig(authDb));
+  await migration.runMigrations();
+  logger.info({ createdTables: migration.toBeCreated.length, alteredTables: migration.toBeAdded.length }, 'Central auth PostgreSQL schema is ready');
+}
+
+export async function createAuth(options: CreateAuthOptions = {}): Promise<Auth<any>> {
+  const authDb = options.postgresPool ?? getPostgresPool();
+  const config = buildAuthConfig(authDb);
 
   auth = betterAuth(config) as Auth<any>;
   return auth;

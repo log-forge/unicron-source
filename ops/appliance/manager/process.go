@@ -138,13 +138,57 @@ func exitCode(err error) int {
 	if err == nil {
 		return 0
 	}
-	var exitErr *exec.ExitError
-	if errors.As(err, &exitErr) {
-		if status, ok := exitErr.Sys().(syscall.WaitStatus); ok {
-			return status.ExitStatus()
+	if status, ok := waitStatus(err); ok {
+		if status.Signaled() {
+			return 128 + int(status.Signal())
 		}
+		return status.ExitStatus()
 	}
 	return 1
+}
+
+func exitSignal(err error) (syscall.Signal, bool) {
+	status, ok := waitStatus(err)
+	if !ok || !status.Signaled() {
+		return 0, false
+	}
+	return status.Signal(), true
+}
+
+func waitStatus(err error) (syscall.WaitStatus, bool) {
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) {
+		return 0, false
+	}
+	status, ok := exitErr.Sys().(syscall.WaitStatus)
+	return status, ok
+}
+
+func formatSignal(signal syscall.Signal) string {
+	name := ""
+	switch signal {
+	case syscall.SIGABRT:
+		name = "SIGABRT"
+	case syscall.SIGBUS:
+		name = "SIGBUS"
+	case syscall.SIGFPE:
+		name = "SIGFPE"
+	case syscall.SIGILL:
+		name = "SIGILL"
+	case syscall.SIGINT:
+		name = "SIGINT"
+	case syscall.SIGKILL:
+		name = "SIGKILL"
+	case syscall.SIGSEGV:
+		name = "SIGSEGV"
+	case syscall.SIGTERM:
+		name = "SIGTERM"
+	}
+	description := signal.String()
+	if name == "" {
+		return fmt.Sprintf("signal %d (%s)", signal, description)
+	}
+	return fmt.Sprintf("%s (%s)", name, description)
 }
 
 func processAlive(pid int) bool {

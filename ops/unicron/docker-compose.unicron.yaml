@@ -373,25 +373,6 @@ services:
       retries: 6
       start_period: 5s
 
-  central-auth-mongodb:
-    <<: *push_defaults
-    image: mongo:7
-    container_name: unicron-central-auth-mongodb
-    restart: unless-stopped
-    networks:
-      - unicron-network
-    environment:
-      MONGO_INITDB_ROOT_USERNAME: ${CENTRAL_AUTH_MONGO_ROOT_USERNAME:-root}
-      MONGO_INITDB_ROOT_PASSWORD: ${CENTRAL_AUTH_MONGO_ROOT_PASSWORD:-password}
-    volumes:
-      - central-auth-mongo-data:/data/db
-    healthcheck:
-      test: ['CMD', 'mongosh', '--quiet', '--eval', 'db.adminCommand("ping").ok']
-      interval: 10s
-      timeout: 5s
-      retries: 6
-      start_period: 10s
-
   central-auth:
     <<: *push_defaults
     build:
@@ -403,14 +384,18 @@ services:
     networks:
       - unicron-network
     depends_on:
-      central-auth-mongodb:
+      postgres:
         condition: service_healthy
     environment:
       NODE_ENV: production
       PORT: 3020
-      MONGODB_URI: 'mongodb://${CENTRAL_AUTH_MONGO_ROOT_USERNAME:-root}:${CENTRAL_AUTH_MONGO_ROOT_PASSWORD:-password}@central-auth-mongodb:27017/?authSource=admin'
-      MONGODB_DB_NAME: '${CENTRAL_AUTH_MONGODB_DB_NAME:-unicron_central_auth}'
-      MONGODB_TLS: 'false'
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: '${POSTGRES_USER}'
+      POSTGRES_PASSWORD: '${POSTGRES_PASSWORD}'
+      POSTGRES_DB: '${POSTGRES_DB}'
+      CENTRAL_AUTH_POSTGRES_SCHEMA: '${CENTRAL_AUTH_POSTGRES_SCHEMA:-central_auth}'
+      POSTGRES_SSL: 'false'
       CENTRAL_AUTH_SECRET: '${CENTRAL_AUTH_SECRET:?CENTRAL_AUTH_SECRET is required}'
       CENTRAL_AUTH_BASE_URL: 'https://${UNICRON_CENTRAL_FQDN}:${UNICRON_CENTRAL_PORT}/unicron/auth'
       CENTRAL_AUTH_COOKIE_NAME: '${CENTRAL_AUTH_COOKIE_NAME:-unicron.central_auth.session}'
@@ -722,8 +707,6 @@ volumes:
     name: unicron-otel-data
   notifier-data:
     name: unicron-notifier-data
-  central-auth-mongo-data:
-    name: unicron-central-auth-mongo-data
 
 networks:
   unicron-network:
