@@ -98,6 +98,11 @@ export class AuthStore {
     return result.rowCount === 1;
   }
 
+  async readCredentialPassword(userId: string): Promise<string | null> {
+    const result = await this.pool.query<{ password: string | null }>('SELECT password FROM account WHERE "userId" = $1 AND "providerId" = $2 LIMIT 1', [userId, 'credential']);
+    return result.rows[0]?.password ?? null;
+  }
+
   async writeCredential(userId: string, passwordHash: string): Promise<void> {
     const client = await this.pool.connect();
     try {

@@ -65,6 +65,22 @@ docker compose -f deploy/standalone/docker-compose.yml up -d
 
 ## Development
 
+### Upgrading Multi-container Auth
+
+Compose retains `unicron-central-auth-mongo-data` and imports the existing login
+before creating a new administrator. Keep the old `CENTRAL_AUTH_MONGO_ROOT_USERNAME`,
+`CENTRAL_AUTH_MONGO_ROOT_PASSWORD`, and `CENTRAL_AUTH_MONGODB_DB_NAME` settings.
+Back up both databases before upgrading. Missing legacy users, missing passwords,
+or conflicting PostgreSQL and MongoDB accounts stop startup rather than replacing
+the login. Restore the missing data or correct the connection settings before retrying.
+
+Fresh installs never start MongoDB. After migration, restarting the legacy helper
+leaves it idle; it no longer needs a MongoDB-compatible CPU. The first migration
+of an old database still requires a compatible CPU. Keep the new
+`unicron-central-auth-migration` volume with PostgreSQL when backing up or restoring.
+
+### Local Checks
+
 Useful commands:
 
 ```sh
@@ -87,6 +103,14 @@ make test-central-auth
 (cd ops/appliance/manager && go test ./...)
 (cd edge/go-streamer && go test ./...)
 (cd central/unicron/backend && poetry run python -m unittest tests.test_security_hardening tests.test_origin_policy tests.test_appliance_update)
+```
+
+Test the production multi-container auth wiring with isolated containers and
+volumes (including real legacy password migration and failure cases):
+
+```sh
+docker build -f central/auth/Dockerfile -t unicron-central-auth:local-test .
+python3 ops/testing/test-central-auth-compose.py unicron-central-auth:local-test
 ```
 
 ## Contributing

@@ -61,6 +61,7 @@ export const EnvSchema = z.object({
   LEGACY_MONGODB_URI: z.preprocess((value) => (value === '' ? undefined : value), z.url().optional()),
   LEGACY_MONGODB_DB_NAME: z.string().min(1).default('unicron_central_auth'),
   LEGACY_MONGODB_MIGRATION_MARKER: z.preprocess((value) => (value === '' ? undefined : value), z.string().optional()),
+  LEGACY_MONGODB_SOURCE_STATE_FILE: z.preprocess((value) => (value === '' ? undefined : value), z.string().optional()),
 
   CENTRAL_AUTH_SECRET: z.string().min(32).default('changeme-central-auth-secret-please-override-123456'),
   CENTRAL_AUTH_BASE_URL: z.url().default('http://localhost:3020'),

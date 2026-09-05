@@ -19,7 +19,7 @@ function poolConfig(overrides: Partial<PoolConfig> = {}): PoolConfig {
     max: env.POSTGRES_MAX_POOL_SIZE,
     ssl: env.POSTGRES_SSL ? { rejectUnauthorized: env.POSTGRES_SSL_REJECT_UNAUTHORIZED } : false,
     application_name: env.SERVICE_NAME,
-    options: `-c search_path=${schema},public`,
+    options: `-c search_path=${quoteIdentifier(schema)}`,
     ...overrides,
   };
 }

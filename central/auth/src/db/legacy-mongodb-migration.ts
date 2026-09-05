@@ -1,4 +1,4 @@
-import { mkdir, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { MongoClient, type Document } from 'mongodb';
 import { env } from '../config/env';
@@ -46,6 +46,9 @@ export async function importLegacyMongoDocuments(store: AuthStore, users: Docume
     throw new Error(`central/auth migration found ${users.length} MongoDB users; local appliance auth supports exactly one administrator.`);
   }
   if (users.length === 0) return null;
+  if (typeof credential?.password !== 'string' || !credential.password.trim()) {
+    throw new Error('Legacy MongoDB administrator has no password credential; refusing to replace it with a bootstrap password.');
+  }
 
   const user = mapLegacyUser(users[0]);
   await store.importLegacyAdmin(user, mapLegacyCredential(credential));
@@ -61,15 +64,33 @@ async function writeMigrationMarker(path?: string): Promise<void> {
 }
 
 export async function migrateLegacyMongoAuth(store: AuthStore = getAuthStore()): Promise<void> {
-  if (!env.LEGACY_MONGODB_URI) return;
+  let sourceRequiresMigration = false;
+  if (env.LEGACY_MONGODB_SOURCE_STATE_FILE) {
+    const state = (await readFile(env.LEGACY_MONGODB_SOURCE_STATE_FILE, 'utf8')).trim();
+    if (state === 'empty') return;
+    if (state !== 'required' && state !== 'completed') throw new Error('Unknown legacy MongoDB source state; refusing to bootstrap.');
+    sourceRequiresMigration = true;
+  }
+  if (!env.LEGACY_MONGODB_URI && !env.LEGACY_MONGODB_MIGRATION_MARKER && !sourceRequiresMigration) return;
 
   const existingUsers = await store.listUsers();
   if (existingUsers.length > 1) {
     throw new Error(`central/auth migration found ${existingUsers.length} PostgreSQL users; local appliance auth supports exactly one administrator.`);
   }
-  if (existingUsers.length === 1) {
-    await writeMigrationMarker(env.LEGACY_MONGODB_MIGRATION_MARKER);
-    logger.info({ userId: existingUsers[0].id }, 'Legacy MongoDB auth migration was already applied');
+  if (env.LEGACY_MONGODB_MIGRATION_MARKER) {
+    const marker = await readFile(env.LEGACY_MONGODB_MIGRATION_MARKER, 'utf8').catch((err: NodeJS.ErrnoException) => {
+      if (err.code === 'ENOENT') return '';
+      throw err;
+    });
+    if (marker.trim()) {
+      if (existingUsers.length !== 1) throw new Error('Legacy migration is marked complete but the PostgreSQL administrator is missing; restore PostgreSQL before starting auth.');
+      if (!(await store.readCredentialPassword(existingUsers[0].id))?.trim()) throw new Error('Migrated PostgreSQL administrator has no password credential; restore it before starting auth.');
+      return;
+    }
+  }
+
+  if (!env.LEGACY_MONGODB_URI) {
+    if (sourceRequiresMigration) throw new Error('Legacy MongoDB migration is required but its connection URI is missing.');
     return;
   }
 
@@ -81,14 +102,19 @@ export async function migrateLegacyMongoAuth(store: AuthStore = getAuthStore()):
     if (users.length === 1) {
       const legacyUser = users[0];
       const credential = await database.collection('account').findOne({ userId: legacyUser._id, providerId: 'credential' });
-      await importLegacyMongoDocuments(store, users, credential);
+      if (typeof credential?.password !== 'string' || !credential.password.trim()) throw new Error('Legacy MongoDB administrator has no password credential; refusing to bootstrap.');
+      if (existingUsers.length === 1) {
+        // An import can commit before its filesystem marker is written. Only the same identity is a safe retry.
+        if (existingUsers[0].id !== String(legacyUser._id)) throw new Error('PostgreSQL and legacy MongoDB contain different administrators; refusing to replace either account.');
+        if ((await store.readCredentialPassword(existingUsers[0].id)) !== credential.password) throw new Error('PostgreSQL and legacy MongoDB credentials differ without a completed migration; refusing to bootstrap.');
+      } else {
+        await importLegacyMongoDocuments(store, users, credential);
+      }
       logger.warn({ userId: String(legacyUser._id), sessionsMigrated: false }, 'Migrated local administrator from MongoDB to PostgreSQL; existing sessions were revoked');
+      await writeMigrationMarker(env.LEGACY_MONGODB_MIGRATION_MARKER);
     } else {
-      await importLegacyMongoDocuments(store, users, null);
-      logger.info('Legacy MongoDB auth database was empty; PostgreSQL bootstrap will create the administrator');
+      throw new Error(`Legacy MongoDB migration expected exactly one administrator but found ${users.length}; check the database name and restore missing auth data before starting auth.`);
     }
-
-    await writeMigrationMarker(env.LEGACY_MONGODB_MIGRATION_MARKER);
   } finally {
     await client.close().catch(() => undefined);
   }

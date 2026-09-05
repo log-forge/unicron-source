@@ -16,6 +16,9 @@ export function resetAuthEnv(overrides: Partial<typeof env> = {}) {
   env.CENTRAL_ADMIN_PASSWORD = TEST_PASSWORD;
   env.CENTRAL_ADMIN_RECOVERY_OVERRIDE = false;
   env.CORS_ORIGINS = 'http://localhost:3000';
+  env.LEGACY_MONGODB_URI = undefined;
+  env.LEGACY_MONGODB_SOURCE_STATE_FILE = undefined;
+  env.LEGACY_MONGODB_MIGRATION_MARKER = undefined;
   Object.assign(env, overrides);
 }
 
