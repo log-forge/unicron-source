@@ -14,7 +14,6 @@ func serviceSpecs() []ServiceSpec {
 	return []ServiceSpec{
 		{Name: "postgres", StartSecs: 5 * time.Second, Critical: true},
 		{Name: "redis", StartSecs: 3 * time.Second, Critical: true},
-		{Name: "mongo", StartSecs: 5 * time.Second, Critical: true},
 		{Name: "stepca", StartSecs: 5 * time.Second, Critical: true},
 		{Name: "stepca-ra", StartSecs: 5 * time.Second, Critical: true},
 		{Name: "traefik", StartSecs: 5 * time.Second, Critical: true},
@@ -32,6 +31,10 @@ func serviceSpecs() []ServiceSpec {
 
 func supervisedServiceSpecs(cfg RuntimeConfig) []ServiceSpec {
 	specs := append([]ServiceSpec{}, serviceSpecs()...)
+	if cfg.LegacyAuthMigrationRequired {
+		mongo := ServiceSpec{Name: "mongo", StartSecs: 5 * time.Second, Critical: true}
+		specs = append(specs[:2], append([]ServiceSpec{mongo}, specs[2:]...)...)
+	}
 	if cfg.SelfUpdateEnabled {
 		specs = append(specs, ServiceSpec{Name: "appliance-updater", StartSecs: 2 * time.Second, Critical: false})
 	}
@@ -173,10 +176,16 @@ func superviseService(ctx context.Context, cfg RuntimeConfig, spec ServiceSpec, 
 func storeExit(name string, store *statusStore, pid, restarts int, err error) {
 	code := exitCode(err)
 	msg := ""
-	if err != nil {
-		msg = err.Error()
+	if signal, ok := exitSignal(err); ok {
+		formattedSignal := formatSignal(signal)
+		msg = "terminated by " + formattedSignal
+		logf("APPLIANCE-ENTRY", "Service %s terminated by %s (exit code %d)", name, formattedSignal, code)
+	} else {
+		if err != nil {
+			msg = err.Error()
+		}
+		logf("APPLIANCE-ENTRY", "Service %s exited with code %d", name, code)
 	}
-	logf("APPLIANCE-ENTRY", "Service %s exited with code %d", name, code)
 	store.update(name, func(status ServiceStatus) ServiceStatus {
 		status.State = "exited"
 		status.PID = pid

@@ -374,22 +374,23 @@ services:
       start_period: 5s
 
   central-auth-mongodb:
-    <<: *push_defaults
     image: mongo:7
     container_name: unicron-central-auth-mongodb
     restart: unless-stopped
     networks:
       - unicron-network
-    environment:
-      MONGO_INITDB_ROOT_USERNAME: ${CENTRAL_AUTH_MONGO_ROOT_USERNAME:-root}
-      MONGO_INITDB_ROOT_PASSWORD: ${CENTRAL_AUTH_MONGO_ROOT_PASSWORD:-password}
+    entrypoint: ['/bin/sh', '/legacy-auth-mongodb.sh']
     volumes:
       - central-auth-mongo-data:/data/db
+      - central-auth-migration:/migration
+      - ./scripts/legacy-auth-mongodb.sh:/legacy-auth-mongodb.sh:ro
     healthcheck:
-      test: ['CMD', 'mongosh', '--quiet', '--eval', 'db.adminCommand("ping").ok']
-      interval: 10s
+      test:
+        - CMD-SHELL
+        - 'case "$$(cat /migration/source-state 2>/dev/null)" in empty|completed) exit 0;; required) mongosh --quiet --eval "quit(db.adminCommand({ping: 1}).ok ? 0 : 1)";; *) exit 1;; esac'
+      interval: 5s
       timeout: 5s
-      retries: 6
+      retries: 24
       start_period: 10s
 
   central-auth:
@@ -399,18 +400,31 @@ services:
       dockerfile: central/auth/Dockerfile
     image: unicron-central-auth
     container_name: central-auth
+    user: '1000:1000'
     restart: unless-stopped
     networks:
       - unicron-network
     depends_on:
+      postgres:
+        condition: service_healthy
       central-auth-mongodb:
         condition: service_healthy
+    volumes:
+      - central-auth-migration:/migration
     environment:
       NODE_ENV: production
       PORT: 3020
-      MONGODB_URI: 'mongodb://${CENTRAL_AUTH_MONGO_ROOT_USERNAME:-root}:${CENTRAL_AUTH_MONGO_ROOT_PASSWORD:-password}@central-auth-mongodb:27017/?authSource=admin'
-      MONGODB_DB_NAME: '${CENTRAL_AUTH_MONGODB_DB_NAME:-unicron_central_auth}'
-      MONGODB_TLS: 'false'
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: '${POSTGRES_USER}'
+      POSTGRES_PASSWORD: '${POSTGRES_PASSWORD}'
+      POSTGRES_DB: '${POSTGRES_DB}'
+      CENTRAL_AUTH_POSTGRES_SCHEMA: '${CENTRAL_AUTH_POSTGRES_SCHEMA:-central_auth}'
+      POSTGRES_SSL: 'false'
+      LEGACY_MONGODB_URI: 'mongodb://${CENTRAL_AUTH_MONGO_ROOT_USERNAME:-root}:${CENTRAL_AUTH_MONGO_ROOT_PASSWORD:-password}@central-auth-mongodb:27017/?authSource=admin'
+      LEGACY_MONGODB_DB_NAME: '${CENTRAL_AUTH_MONGODB_DB_NAME:-unicron_central_auth}'
+      LEGACY_MONGODB_SOURCE_STATE_FILE: /migration/source-state
+      LEGACY_MONGODB_MIGRATION_MARKER: /migration/completed
       CENTRAL_AUTH_SECRET: '${CENTRAL_AUTH_SECRET:?CENTRAL_AUTH_SECRET is required}'
       CENTRAL_AUTH_BASE_URL: 'https://${UNICRON_CENTRAL_FQDN}:${UNICRON_CENTRAL_PORT}/unicron/auth'
       CENTRAL_AUTH_COOKIE_NAME: '${CENTRAL_AUTH_COOKIE_NAME:-unicron.central_auth.session}'
@@ -696,6 +710,10 @@ services:
       start_period: 30s
 
 volumes:
+  central-auth-mongo-data:
+    name: unicron-central-auth-mongo-data
+  central-auth-migration:
+    name: unicron-central-auth-migration
   stepca-data:
     name: unicron-stepca-data
   stepca-trust:
@@ -722,8 +740,6 @@ volumes:
     name: unicron-otel-data
   notifier-data:
     name: unicron-notifier-data
-  central-auth-mongo-data:
-    name: unicron-central-auth-mongo-data
 
 networks:
   unicron-network:

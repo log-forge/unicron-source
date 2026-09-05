@@ -10,11 +10,12 @@ LOCAL_BUILD_ENV ?= BUILDX_BUILDER=default
 DIND_COMPOSE_FILE ?= ops/dind/docker-compose.dind.yaml
 CENTRAL_COMPOSE_FILE ?= ops/unicron/docker-compose.unicron.yaml
 CENTRAL_ENV_FILE ?= ops/unicron/.env
-CENTRAL_AUTH_TEST_MONGO_COMPOSE_FILE ?= ops/testing/docker-compose.central-auth-test-mongo.yml
-CENTRAL_AUTH_TEST_MONGO_PORT ?= 27018
-CENTRAL_AUTH_TEST_MONGO_ROOT_USERNAME ?= root
-CENTRAL_AUTH_TEST_MONGO_ROOT_PASSWORD ?= password
-CENTRAL_AUTH_TEST_MONGODB_DB_NAME ?= central_auth_test
+CENTRAL_AUTH_TEST_POSTGRES_COMPOSE_FILE ?= ops/testing/docker-compose.central-auth-test-postgres.yml
+CENTRAL_AUTH_TEST_POSTGRES_PORT ?= 5433
+CENTRAL_AUTH_TEST_POSTGRES_USER ?= postgres
+CENTRAL_AUTH_TEST_POSTGRES_PASSWORD ?= password
+CENTRAL_AUTH_TEST_POSTGRES_DB ?= central_auth_test
+CENTRAL_AUTH_TEST_POSTGRES_SCHEMA ?= central_auth_test
 
 REGISTRY ?= localhost:5000
 TAG ?= latest
@@ -23,8 +24,7 @@ RELEASE_PLATFORMS ?= linux/amd64,linux/arm64
 
 CENTRAL_ENV_ARG = $(if $(wildcard $(CENTRAL_ENV_FILE)),--env-file $(CENTRAL_ENV_FILE),)
 CENTRAL_COMPOSE = $(LOCAL_BUILD_ENV) $(COMPOSE) -f $(CENTRAL_COMPOSE_FILE) $(CENTRAL_ENV_ARG)
-CENTRAL_AUTH_TEST_MONGODB_URI ?= mongodb://$(CENTRAL_AUTH_TEST_MONGO_ROOT_USERNAME):$(CENTRAL_AUTH_TEST_MONGO_ROOT_PASSWORD)@127.0.0.1:$(CENTRAL_AUTH_TEST_MONGO_PORT)/?authSource=admin
-CENTRAL_AUTH_TEST_MONGO_COMPOSE = $(LOCAL_BUILD_ENV) $(COMPOSE) -f $(CENTRAL_AUTH_TEST_MONGO_COMPOSE_FILE)
+CENTRAL_AUTH_TEST_POSTGRES_COMPOSE = $(LOCAL_BUILD_ENV) $(COMPOSE) -f $(CENTRAL_AUTH_TEST_POSTGRES_COMPOSE_FILE)
 DIND_COMPOSE = $(LOCAL_BUILD_ENV) $(COMPOSE) -f $(DIND_COMPOSE_FILE)
 
 OTEL_MIN_IMAGE ?= unicron-otel-min
@@ -71,9 +71,9 @@ APPLIANCE_NETWORK_ALIAS ?= unicron.central
 	central-down \
 	central-destroy \
 	central-migrate \
-	central-auth-test-mongo-up \
-	central-auth-test-mongo-down \
-	central-auth-test-mongo-destroy \
+	central-auth-test-postgres-up \
+	central-auth-test-postgres-down \
+	central-auth-test-postgres-destroy \
 	test-central-auth \
 	build-otel-min \
 	build-fluent-bit-min \
@@ -185,38 +185,40 @@ central-migrate: ## Run central backend migrations
 	@$(CENTRAL_COMPOSE) run --rm --no-deps backend \
 		python /app/backend/scripts/migrate_or_bootstrap.py
 
-central-auth-test-mongo-up: ## Start disposable central-auth test Mongo and wait for readiness
+central-auth-test-postgres-up: ## Start disposable central-auth test Postgres and wait for readiness
 	@echo ""
-	@echo "Starting central-auth test Mongo on 127.0.0.1:$(CENTRAL_AUTH_TEST_MONGO_PORT)..."
-	@CENTRAL_AUTH_TEST_MONGO_PORT="$(CENTRAL_AUTH_TEST_MONGO_PORT)" \
-		CENTRAL_AUTH_TEST_MONGO_ROOT_USERNAME="$(CENTRAL_AUTH_TEST_MONGO_ROOT_USERNAME)" \
-		CENTRAL_AUTH_TEST_MONGO_ROOT_PASSWORD="$(CENTRAL_AUTH_TEST_MONGO_ROOT_PASSWORD)" \
-		CENTRAL_AUTH_TEST_MONGODB_DB_NAME="$(CENTRAL_AUTH_TEST_MONGODB_DB_NAME)" \
-		$(CENTRAL_AUTH_TEST_MONGO_COMPOSE) up -d --wait --wait-timeout $(WAIT_TIMEOUT)
+	@echo "Starting central-auth test Postgres on 127.0.0.1:$(CENTRAL_AUTH_TEST_POSTGRES_PORT)..."
+	@CENTRAL_AUTH_TEST_POSTGRES_PORT="$(CENTRAL_AUTH_TEST_POSTGRES_PORT)" \
+		CENTRAL_AUTH_TEST_POSTGRES_USER="$(CENTRAL_AUTH_TEST_POSTGRES_USER)" \
+		CENTRAL_AUTH_TEST_POSTGRES_PASSWORD="$(CENTRAL_AUTH_TEST_POSTGRES_PASSWORD)" \
+		CENTRAL_AUTH_TEST_POSTGRES_DB="$(CENTRAL_AUTH_TEST_POSTGRES_DB)" \
+		$(CENTRAL_AUTH_TEST_POSTGRES_COMPOSE) up -d --wait --wait-timeout $(WAIT_TIMEOUT)
 
-central-auth-test-mongo-down: ## Stop central-auth test Mongo while preserving its disposable volume
+central-auth-test-postgres-down: ## Stop central-auth test Postgres while preserving its disposable volume
 	@echo ""
-	@echo "Stopping central-auth test Mongo..."
-	@CENTRAL_AUTH_TEST_MONGO_PORT="$(CENTRAL_AUTH_TEST_MONGO_PORT)" \
-		CENTRAL_AUTH_TEST_MONGO_ROOT_USERNAME="$(CENTRAL_AUTH_TEST_MONGO_ROOT_USERNAME)" \
-		CENTRAL_AUTH_TEST_MONGO_ROOT_PASSWORD="$(CENTRAL_AUTH_TEST_MONGO_ROOT_PASSWORD)" \
-		CENTRAL_AUTH_TEST_MONGODB_DB_NAME="$(CENTRAL_AUTH_TEST_MONGODB_DB_NAME)" \
-		$(CENTRAL_AUTH_TEST_MONGO_COMPOSE) down --remove-orphans || true
+	@CENTRAL_AUTH_TEST_POSTGRES_PORT="$(CENTRAL_AUTH_TEST_POSTGRES_PORT)" \
+		CENTRAL_AUTH_TEST_POSTGRES_USER="$(CENTRAL_AUTH_TEST_POSTGRES_USER)" \
+		CENTRAL_AUTH_TEST_POSTGRES_PASSWORD="$(CENTRAL_AUTH_TEST_POSTGRES_PASSWORD)" \
+		CENTRAL_AUTH_TEST_POSTGRES_DB="$(CENTRAL_AUTH_TEST_POSTGRES_DB)" \
+		$(CENTRAL_AUTH_TEST_POSTGRES_COMPOSE) down --remove-orphans || true
 
-central-auth-test-mongo-destroy: ## Destructively remove central-auth test Mongo and its disposable volume
+central-auth-test-postgres-destroy: ## Destructively remove central-auth test Postgres and its disposable volume
 	@echo ""
-	@echo "Destroying central-auth test Mongo and volume..."
-	@CENTRAL_AUTH_TEST_MONGO_PORT="$(CENTRAL_AUTH_TEST_MONGO_PORT)" \
-		CENTRAL_AUTH_TEST_MONGO_ROOT_USERNAME="$(CENTRAL_AUTH_TEST_MONGO_ROOT_USERNAME)" \
-		CENTRAL_AUTH_TEST_MONGO_ROOT_PASSWORD="$(CENTRAL_AUTH_TEST_MONGO_ROOT_PASSWORD)" \
-		CENTRAL_AUTH_TEST_MONGODB_DB_NAME="$(CENTRAL_AUTH_TEST_MONGODB_DB_NAME)" \
-		$(CENTRAL_AUTH_TEST_MONGO_COMPOSE) down -v --remove-orphans || true
+	@CENTRAL_AUTH_TEST_POSTGRES_PORT="$(CENTRAL_AUTH_TEST_POSTGRES_PORT)" \
+		CENTRAL_AUTH_TEST_POSTGRES_USER="$(CENTRAL_AUTH_TEST_POSTGRES_USER)" \
+		CENTRAL_AUTH_TEST_POSTGRES_PASSWORD="$(CENTRAL_AUTH_TEST_POSTGRES_PASSWORD)" \
+		CENTRAL_AUTH_TEST_POSTGRES_DB="$(CENTRAL_AUTH_TEST_POSTGRES_DB)" \
+		$(CENTRAL_AUTH_TEST_POSTGRES_COMPOSE) down -v --remove-orphans || true
 
-test-central-auth: central-auth-test-mongo-up ## Run central-auth unit and integration tests against disposable Mongo
+test-central-auth: central-auth-test-postgres-up ## Run central-auth unit and integration tests against disposable Postgres
 	@echo ""
-	@echo "Running central-auth tests against $(CENTRAL_AUTH_TEST_MONGODB_URI)"
-	@CENTRAL_AUTH_TEST_MONGODB_URI="$(CENTRAL_AUTH_TEST_MONGODB_URI)" \
-		CENTRAL_AUTH_TEST_MONGODB_DB_NAME="$(CENTRAL_AUTH_TEST_MONGODB_DB_NAME)" \
+	@echo "Running central-auth tests against Postgres on 127.0.0.1:$(CENTRAL_AUTH_TEST_POSTGRES_PORT)"
+	@CENTRAL_AUTH_TEST_POSTGRES_HOST="127.0.0.1" \
+		CENTRAL_AUTH_TEST_POSTGRES_PORT="$(CENTRAL_AUTH_TEST_POSTGRES_PORT)" \
+		CENTRAL_AUTH_TEST_POSTGRES_USER="$(CENTRAL_AUTH_TEST_POSTGRES_USER)" \
+		CENTRAL_AUTH_TEST_POSTGRES_PASSWORD="$(CENTRAL_AUTH_TEST_POSTGRES_PASSWORD)" \
+		CENTRAL_AUTH_TEST_POSTGRES_DB="$(CENTRAL_AUTH_TEST_POSTGRES_DB)" \
+		CENTRAL_AUTH_TEST_POSTGRES_SCHEMA="$(CENTRAL_AUTH_TEST_POSTGRES_SCHEMA)" \
 		npm --prefix central/auth run test:all
 
 define docker_build_only

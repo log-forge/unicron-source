@@ -25,6 +25,11 @@ services:
       - unicron-stepca-ra:127.0.0.1
       - unicron.central:127.0.0.1
       - ${UNICRON_CENTRAL_FQDN:-localhost}:127.0.0.1
+    networks:
+      default:
+        aliases:
+          # Local agents use this TLS hostname when they join the appliance network.
+          - unicron.central
     ports:
       - ${UNICRON_HTTP_PORT:-80}:80
       - ${UNICRON_HTTPS_PORT:-443}:443
@@ -35,6 +40,7 @@ services:
       UNICRON_PUBLIC_CENTRAL_PORT: ${UNICRON_HTTPS_PORT:-443}
       UNICRON_PUBLIC_CENTRAL_MTLS_PORT: ${UNICRON_MTLS_PORT:-8443}
       UNICRON_APPLIANCE_CONTAINER_NAME: ${UNICRON_CONTAINER_NAME:-unicron-appliance}
+      LOCAL_AGENT_DOCKER_NETWORK: ${UNICRON_DOCKER_NETWORK:-logforge-unicron-network}
       TMPDIR: /run/pyinstaller
       CENTRAL_ADMIN_USERNAME: ${CENTRAL_ADMIN_USERNAME:-admin}
       CENTRAL_ADMIN_PASSWORD: ${CENTRAL_ADMIN_PASSWORD:-}
@@ -50,3 +56,8 @@ services:
 volumes:
   unicron-data:
     name: unicron-data
+
+networks:
+  default:
+    # Keep this stable because locally generated agent enrollment commands join it.
+    name: ${UNICRON_DOCKER_NETWORK:-logforge-unicron-network}

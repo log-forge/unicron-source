@@ -45,12 +45,23 @@ export const EnvSchema = z.object({
   KEEPALIVE_TIMEOUT_MS: z.coerce.number().int().min(0).default(5000),
   SHUTDOWN_DRAIN_MS: z.coerce.number().int().min(0).default(5000),
 
-  MONGODB_URI: z.url().default('mongodb://localhost:27017'),
-  MONGODB_DB_NAME: z.string().min(1).default('central_auth'),
-  MONGODB_MIN_POOL_SIZE: z.coerce.number().int().min(0).default(0),
-  MONGODB_MAX_POOL_SIZE: z.coerce.number().int().min(1).default(10),
-  MONGODB_TLS: envBoolean(booleanEnvValue.default(true)),
-  MONGODB_RETRY_WRITES: envBoolean(booleanEnvValue.default(true)),
+  POSTGRES_HOST: z.string().min(1).default('localhost'),
+  POSTGRES_PORT: z.coerce.number().int().positive().default(5432),
+  POSTGRES_USER: z.string().min(1).default('postgres'),
+  POSTGRES_PASSWORD: z.string().default('postgres'),
+  POSTGRES_DB: z.string().min(1).default('unicron'),
+  CENTRAL_AUTH_POSTGRES_SCHEMA: z
+    .string()
+    .regex(/^[A-Za-z_][A-Za-z0-9_]*$/)
+    .default('central_auth'),
+  POSTGRES_MAX_POOL_SIZE: z.coerce.number().int().min(1).default(10),
+  POSTGRES_SSL: envBoolean(booleanEnvValue.default(false)),
+  POSTGRES_SSL_REJECT_UNAUTHORIZED: envBoolean(booleanEnvValue.default(true)),
+
+  LEGACY_MONGODB_URI: z.preprocess((value) => (value === '' ? undefined : value), z.url().optional()),
+  LEGACY_MONGODB_DB_NAME: z.string().min(1).default('unicron_central_auth'),
+  LEGACY_MONGODB_MIGRATION_MARKER: z.preprocess((value) => (value === '' ? undefined : value), z.string().optional()),
+  LEGACY_MONGODB_SOURCE_STATE_FILE: z.preprocess((value) => (value === '' ? undefined : value), z.string().optional()),
 
   CENTRAL_AUTH_SECRET: z.string().min(32).default('changeme-central-auth-secret-please-override-123456'),
   CENTRAL_AUTH_BASE_URL: z.url().default('http://localhost:3020'),

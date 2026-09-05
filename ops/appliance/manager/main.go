@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 )
 
 func main() {
@@ -44,6 +45,17 @@ func dispatch() error {
 }
 
 func runEntrypoint(cfg RuntimeConfig) error {
+	legacyMigrationRequired, err := legacyMongoMigrationRequired(cfg)
+	if err != nil {
+		return fmt.Errorf("appliance preflight failed: %w", err)
+	}
+	cfg.LegacyAuthMigrationRequired = legacyMigrationRequired
+	_ = os.Setenv("UNICRON_LEGACY_AUTH_MIGRATION_REQUIRED", strconv.FormatBool(legacyMigrationRequired))
+	if legacyMigrationRequired {
+		if err := checkMongoRuntimeCompatibility(); err != nil {
+			return fmt.Errorf("appliance preflight failed: %w", err)
+		}
+	}
 	if err := setupAppliance(cfg); err != nil {
 		return err
 	}

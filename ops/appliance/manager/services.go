@@ -161,16 +161,26 @@ func traefikArgs(cfg RuntimeConfig) []string {
 }
 
 func runCentralAuth(cfg RuntimeConfig) error {
-	if err := waitTCP("127.0.0.1", 27017, "MongoDB", 120); err != nil {
+	if err := waitPostgres(cfg); err != nil {
 		return err
 	}
 	publicOrigin := fmt.Sprintf("https://%s:%s", cfg.CentralFQDN, cfg.PublicCentralPort)
 	setServiceEnv(map[string]string{
-		"PORT":            "3020",
-		"MONGODB_URI":     "mongodb://127.0.0.1:27017",
-		"MONGODB_DB_NAME": cfg.CentralAuthMongoDBName,
-		"MONGODB_TLS":     "false",
+		"PORT":                            "3020",
+		"POSTGRES_HOST":                   "127.0.0.1",
+		"POSTGRES_PORT":                   "5432",
+		"CENTRAL_AUTH_POSTGRES_SCHEMA":    cfg.CentralAuthPostgresSchema,
+		"LEGACY_MONGODB_MIGRATION_MARKER": cfg.LegacyAuthMigrationMarker,
 	})
+	if cfg.LegacyAuthMigrationRequired {
+		if err := waitTCP("127.0.0.1", 27017, "legacy MongoDB", 120); err != nil {
+			return err
+		}
+		setServiceEnv(map[string]string{
+			"LEGACY_MONGODB_URI":     "mongodb://127.0.0.1:27017",
+			"LEGACY_MONGODB_DB_NAME": cfg.LegacyAuthMongoDBName,
+		})
+	}
 	setDefaultEnv("CENTRAL_AUTH_BASE_URL", cfg.CentralAuthPublicURL)
 	setDefaultEnv(
 		"CORS_ORIGINS",

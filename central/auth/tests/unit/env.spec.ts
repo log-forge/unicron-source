@@ -25,4 +25,12 @@ describe('environment parsing', () => {
   it('rejects invalid boolean values', () => {
     expect(() => parseEnv({ CENTRAL_ADMIN_RECOVERY_OVERRIDE: 'sure' })).toThrow(/Expected boolean environment value/);
   });
+
+  it('defaults Central Auth to its own PostgreSQL schema', () => {
+    expect(parseEnv({}).CENTRAL_AUTH_POSTGRES_SCHEMA).toBe('central_auth');
+  });
+
+  it('rejects unsafe PostgreSQL schema names', () => {
+    expect(() => parseEnv({ CENTRAL_AUTH_POSTGRES_SCHEMA: 'central-auth; DROP SCHEMA public' })).toThrow();
+  });
 });

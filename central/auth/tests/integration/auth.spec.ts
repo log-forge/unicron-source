@@ -1,14 +1,31 @@
 import request from 'supertest';
+import { hashPassword } from 'better-auth/crypto';
+import { ObjectId } from 'mongodb';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_CENTRAL_ADMIN_PASSWORD } from '../../src/constants';
-import { AccountModel } from '../../src/models/account.model';
-import { SessionModel } from '../../src/models/session.model';
-import { UserModel } from '../../src/models/user.model';
+import { createApp } from '../../src/app';
+import { getAuthStore, type AuthUser } from '../../src/db/auth-store';
+import { getPostgresPool } from '../../src/db/postgres';
 import { bootstrapLocalAdmin } from '../../src/lib/bootstrap-admin';
+import { createAuth, migrateAuthSchema } from '../../src/lib/auth';
+import { importLegacyMongoDocuments } from '../../src/db/legacy-mongodb-migration';
 import { env, parseEnv } from '../../src/config/env';
 import { logger } from '../../src/logging/logger';
 import { buildBootstrappedApp, resetAuthEnv, TEST_PASSWORD, TEST_SECRET } from '../setup/app';
-import { dropTestDatabase, startTestMongo, stopTestMongo } from '../setup/mongoose';
+import { dropTestDatabase, startTestPostgres, stopTestPostgres } from '../../test-support/postgres';
+
+async function users(): Promise<AuthUser[]> {
+  return getAuthStore().listUsers();
+}
+
+async function accounts(): Promise<Array<{ providerId: string }>> {
+  return (await getPostgresPool().query<{ providerId: string }>('SELECT "providerId" FROM account ORDER BY "createdAt"')).rows;
+}
+
+async function sessionCount(): Promise<number> {
+  const result = await getPostgresPool().query<{ count: string }>('SELECT COUNT(*)::text AS count FROM session');
+  return Number(result.rows[0].count);
+}
 
 async function signIn(agent: any, username = env.CENTRAL_ADMIN_USERNAME, password = env.CENTRAL_ADMIN_PASSWORD ?? TEST_PASSWORD) {
   return agent.post('/api/auth/sign-in/username').send({ username, password }).expect(200);
@@ -26,17 +43,20 @@ function applyParsedAuthEnv(overrides: NodeJS.ProcessEnv = {}) {
       CENTRAL_ADMIN_PASSWORD: TEST_PASSWORD,
       CENTRAL_ADMIN_RECOVERY_OVERRIDE: 'false',
       CORS_ORIGINS: 'http://localhost:3000',
-      MONGODB_URI: env.MONGODB_URI,
-      MONGODB_DB_NAME: env.MONGODB_DB_NAME,
-      MONGODB_TLS: 'false',
-      MONGODB_RETRY_WRITES: 'false',
+      POSTGRES_HOST: env.POSTGRES_HOST,
+      POSTGRES_PORT: String(env.POSTGRES_PORT),
+      POSTGRES_USER: env.POSTGRES_USER,
+      POSTGRES_PASSWORD: env.POSTGRES_PASSWORD,
+      POSTGRES_DB: env.POSTGRES_DB,
+      CENTRAL_AUTH_POSTGRES_SCHEMA: env.CENTRAL_AUTH_POSTGRES_SCHEMA,
+      POSTGRES_SSL: 'false',
       ...overrides,
     }),
   );
 }
 
 beforeAll(async () => {
-  await startTestMongo();
+  await startTestPostgres();
 });
 
 beforeEach(async () => {
@@ -46,26 +66,68 @@ beforeEach(async () => {
 });
 
 afterAll(async () => {
-  await stopTestMongo();
+  await stopTestPostgres();
 });
 
 describe('local admin bootstrap', () => {
   it('creates the configured admin and credential on a fresh database', async () => {
     await buildBootstrappedApp();
 
-    const users = await UserModel.find().lean();
-    const accounts = await AccountModel.find().lean();
+    const userRows = await users();
+    const accountRows = await accounts();
 
-    expect(users).toHaveLength(1);
-    expect(users[0]).toMatchObject({
+    expect(userRows).toHaveLength(1);
+    expect(userRows[0]).toMatchObject({
       username: 'admin',
       displayUsername: 'admin',
       email: 'admin@local.unicron.invalid',
       emailVerified: true,
       requiresPasswordChange: false,
     });
-    expect(accounts).toHaveLength(1);
-    expect(accounts[0]).toMatchObject({ providerId: 'credential' });
+    expect(accountRows).toHaveLength(1);
+    expect(accountRows[0]).toMatchObject({ providerId: 'credential' });
+  });
+
+  it('preserves a legacy MongoDB administrator and password while revoking old sessions', async () => {
+    const legacyUserId = new ObjectId();
+    const legacyAccountId = new ObjectId();
+    const createdAt = new Date('2026-01-02T03:04:05Z');
+    const postgresPool = getPostgresPool();
+    await migrateAuthSchema({ postgresPool });
+    await importLegacyMongoDocuments(
+      getAuthStore(),
+      [
+        {
+          _id: legacyUserId,
+          email: 'admin@local.unicron.invalid',
+          emailVerified: true,
+          username: 'admin',
+          displayUsername: 'admin',
+          name: 'admin',
+          requiresPasswordChange: false,
+          createdAt,
+          updatedAt: createdAt,
+        },
+      ],
+      {
+        _id: legacyAccountId,
+        userId: legacyUserId,
+        accountId: legacyUserId.toString(),
+        providerId: 'credential',
+        password: await hashPassword(TEST_PASSWORD),
+        createdAt,
+        updatedAt: createdAt,
+      },
+    );
+
+    const auth = await createAuth({ postgresPool });
+    await bootstrapLocalAdmin();
+    const app = createApp(auth);
+    expect(await sessionCount()).toBe(0);
+    const login = await request(app).post('/api/auth/sign-in/username').send({ username: 'admin', password: TEST_PASSWORD }).expect(200);
+
+    expect(login.body.user.id).toBe(legacyUserId.toString());
+    expect(await sessionCount()).toBe(1);
   });
 
   it('auto-generates a first-boot admin credential only when no password is provided', async () => {
@@ -78,7 +140,7 @@ describe('local admin bootstrap', () => {
 
     expect(generatedPassword).toEqual(expect.stringMatching(/^Unicron-.+-A1!$/));
 
-    const user = await UserModel.findOne().lean();
+    const [user] = await users();
     expect(user).toMatchObject({
       username: 'admin',
       requiresPasswordChange: true,
@@ -92,12 +154,12 @@ describe('local admin bootstrap', () => {
     const agent = request.agent(app);
     await signIn(agent);
     await agent.get('/api/v1/profile').expect(200);
-    const sessionCount = await SessionModel.countDocuments();
+    const originalSessionCount = await sessionCount();
 
     env.CENTRAL_ADMIN_PASSWORD = undefined;
     await bootstrapLocalAdmin();
 
-    expect(await SessionModel.countDocuments()).toBe(sessionCount);
+    expect(await sessionCount()).toBe(originalSessionCount);
     await agent.get('/api/v1/profile').expect(200);
 
     env.CENTRAL_ADMIN_PASSWORD = 'Replacement-Password1!';
@@ -106,8 +168,7 @@ describe('local admin bootstrap', () => {
 
     const ignoredPasswordWarning = warnSpy.mock.calls.find(
       ([, message]) =>
-        message ===
-        'Configured CENTRAL_ADMIN_PASSWORD is intentionally ignored on normal restart; use CENTRAL_ADMIN_RECOVERY_OVERRIDE=true for credential recovery.',
+        message === 'Configured CENTRAL_ADMIN_PASSWORD is intentionally ignored on normal restart; use CENTRAL_ADMIN_RECOVERY_OVERRIDE=true for credential recovery.',
     );
     expect(ignoredPasswordWarning).toBeDefined();
     expect(ignoredPasswordWarning?.[0]).toMatchObject({
@@ -117,7 +178,7 @@ describe('local admin bootstrap', () => {
       sessionsRevoked: false,
     });
     expect(JSON.stringify(ignoredPasswordWarning)).not.toContain('Replacement-Password1!');
-    expect(await SessionModel.countDocuments()).toBe(sessionCount);
+    expect(await sessionCount()).toBe(originalSessionCount);
     await agent.get('/api/v1/profile').expect(200);
     await request(app).post('/api/auth/sign-in/username').send({ username: 'admin', password: 'Replacement-Password1!' }).expect(401);
     await request(app).post('/api/auth/sign-in/username').send({ username: 'admin', password: TEST_PASSWORD }).expect(200);
@@ -172,9 +233,9 @@ describe('local admin bootstrap', () => {
     });
     await bootstrapLocalAdmin();
 
-    expect(await UserModel.countDocuments()).toBe(1);
-    expect(await SessionModel.countDocuments()).toBe(0);
-    const user = await UserModel.findOne().lean();
+    expect(await users()).toHaveLength(1);
+    expect(await sessionCount()).toBe(0);
+    const [user] = await users();
     expect(user).toMatchObject({
       username: 'operator',
       email: 'operator@local.unicron.invalid',
@@ -199,13 +260,18 @@ describe('local admin bootstrap', () => {
 
   it('fails bootstrap when more than one user exists even during recovery', async () => {
     await buildBootstrappedApp();
-    await UserModel.create({
-      email: 'second@local.unicron.invalid',
-      emailVerified: true,
-      username: 'second',
-      displayUsername: 'second',
-      name: 'second',
-    });
+    await getAuthStore().createAdmin(
+      {
+        email: 'second@local.unicron.invalid',
+        emailVerified: true,
+        username: 'second',
+        displayUsername: 'second',
+        name: 'second',
+        image: null,
+        requiresPasswordChange: false,
+      },
+      'unused-test-password-hash',
+    );
 
     env.CENTRAL_ADMIN_RECOVERY_OVERRIDE = true;
     await expect(bootstrapLocalAdmin()).rejects.toThrow(/supports exactly one administrator/);
@@ -301,7 +367,9 @@ describe('disabled auth surfaces', () => {
     ];
 
     for (const testCase of cases) {
-      const res = await request(app)[testCase.method](testCase.path).send(testCase.body ?? {});
+      const res = await request(app)
+        [testCase.method](testCase.path)
+        .send(testCase.body ?? {});
       expect(res.status, `${testCase.method.toUpperCase()} ${testCase.path}`).toBe(404);
       expect(res.body).toMatchObject({ code: 'NOT_FOUND' });
     }
