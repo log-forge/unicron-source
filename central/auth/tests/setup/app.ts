@@ -1,7 +1,7 @@
-import { getPostgresPool } from '../../src/db/postgres';
+import { getMongoDBClient } from '../../src/db/mongoose';
 import { createApp } from '../../src/app';
 import { bootstrapLocalAdmin } from '../../src/lib/bootstrap-admin';
-import { createAuth, migrateAuthSchema } from '../../src/lib/auth';
+import { createAuth } from '../../src/lib/auth';
 import { env } from '../../src/config/env';
 
 export const TEST_PASSWORD = 'Start-Password1!';
@@ -16,16 +16,11 @@ export function resetAuthEnv(overrides: Partial<typeof env> = {}) {
   env.CENTRAL_ADMIN_PASSWORD = TEST_PASSWORD;
   env.CENTRAL_ADMIN_RECOVERY_OVERRIDE = false;
   env.CORS_ORIGINS = 'http://localhost:3000';
-  env.LEGACY_MONGODB_URI = undefined;
-  env.LEGACY_MONGODB_SOURCE_STATE_FILE = undefined;
-  env.LEGACY_MONGODB_MIGRATION_MARKER = undefined;
   Object.assign(env, overrides);
 }
 
 export async function buildBootstrappedApp() {
-  const postgresPool = getPostgresPool();
-  await migrateAuthSchema({ postgresPool });
-  const auth = await createAuth({ postgresPool });
+  const auth = await createAuth({ mongoDb: await getMongoDBClient() });
   await bootstrapLocalAdmin();
   return createApp(auth);
 }

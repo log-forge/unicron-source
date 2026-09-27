@@ -1,20 +1,17 @@
 import http, { type Server } from 'node:http';
 import { env } from './config/env';
-import { connectPostgres, disconnectPostgres, postgresPing } from './db/postgres';
+import { connectMongoose, disconnectMongoose, getMongoDBClient, mongoosePing } from './db/mongoose';
 import { createApp } from './app';
-import { createAuth, migrateAuthSchema } from './lib/auth';
+import { createAuth } from './lib/auth';
 import { bootstrapLocalAdmin } from './lib/bootstrap-admin';
-import { migrateLegacyMongoAuth } from './db/legacy-mongodb-migration';
 import { logger } from './logging/logger';
 import { registerCheck, setDraining } from './utils/readiness';
 
 async function main() {
-  const postgresPool = await connectPostgres();
-  registerCheck('postgresql', postgresPing);
+  await connectMongoose();
+  registerCheck('mongodb', mongoosePing);
 
-  await migrateAuthSchema({ postgresPool });
-  await migrateLegacyMongoAuth();
-  const auth = await createAuth({ postgresPool });
+  const auth = await createAuth({ mongoDb: await getMongoDBClient() });
   await bootstrapLocalAdmin();
 
   const app = createApp(auth);
@@ -34,7 +31,7 @@ async function main() {
       logger.info({ drainMs: env.SHUTDOWN_DRAIN_MS }, 'Drain window complete, closing server');
       server.close(async (err) => {
         if (err) logger.error({ err }, 'Error closing server');
-        await disconnectPostgres();
+        await disconnectMongoose();
         logger.info('HTTP server closed');
         process.exit(err ? 1 : 0);
       });
