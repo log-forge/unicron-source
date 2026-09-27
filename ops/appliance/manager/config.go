@@ -44,12 +44,9 @@ type RuntimeConfig struct {
 	PostgresUser string
 	PostgresDB   string
 
-	CentralAuthPostgresSchema   string
-	CentralAuthCookieName       string
-	CentralAuthPublicURL        string
-	LegacyAuthMongoDBName       string
-	LegacyAuthMigrationMarker   string
-	LegacyAuthMigrationRequired bool
+	CentralAuthMongoDBName string
+	CentralAuthCookieName  string
+	CentralAuthPublicURL   string
 
 	TraefikRouterHosts string
 	TraefikCertSANs    string
@@ -82,9 +79,7 @@ func loadConfig() RuntimeConfig {
 	postgresDB := setDefaultEnv("POSTGRES_DB", "unicron")
 	setDefaultEnv("CENTRAL_ADMIN_USERNAME", "admin")
 	setDefaultEnv("CENTRAL_ADMIN_RECOVERY_OVERRIDE", "false")
-	authPostgresSchema := setDefaultEnv("CENTRAL_AUTH_POSTGRES_SCHEMA", "central_auth")
-	legacyAuthDBName := envOrDefault("LEGACY_MONGODB_DB_NAME", envOrDefault("CENTRAL_AUTH_MONGODB_DB_NAME", "unicron_central_auth"))
-	legacyAuthMigrationMarker := envOrDefault("LEGACY_MONGODB_MIGRATION_MARKER", dataDir+"/central-auth/mongodb-migration-complete")
+	authDBName := setDefaultEnv("CENTRAL_AUTH_MONGODB_DB_NAME", "unicron_central_auth")
 	authCookieName := setDefaultEnv("CENTRAL_AUTH_COOKIE_NAME", "unicron.central_auth.session")
 	authPublicURL := setDefaultEnv("CENTRAL_AUTH_PUBLIC_BASE_URL", fmt.Sprintf("https://%s:%s", centralFQDN, publicCentralPort))
 
@@ -133,12 +128,9 @@ func loadConfig() RuntimeConfig {
 		FrontendPort:                 frontendPort,
 		PostgresUser:                 postgresUser,
 		PostgresDB:                   postgresDB,
-		CentralAuthPostgresSchema:    authPostgresSchema,
+		CentralAuthMongoDBName:       authDBName,
 		CentralAuthCookieName:        authCookieName,
 		CentralAuthPublicURL:         authPublicURL,
-		LegacyAuthMongoDBName:        legacyAuthDBName,
-		LegacyAuthMigrationMarker:    legacyAuthMigrationMarker,
-		LegacyAuthMigrationRequired:  parseBoolEnv(envOrDefault("UNICRON_LEGACY_AUTH_MIGRATION_REQUIRED", "false"), false),
 		TraefikRouterHosts:           routerHosts,
 		TraefikCertSANs:              certSANs,
 		StepCADNS:                    stepCADNS,

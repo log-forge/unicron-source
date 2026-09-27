@@ -237,7 +237,6 @@ RUN groupadd --system mongodb && \
       /home \
       /opt/unicron/bin \
       /var/lib/unicron/backend \
-      /var/lib/unicron/central-auth \
       /var/lib/unicron/mongo \
       /var/lib/unicron/notifier \
       /var/lib/unicron/otelcol \
@@ -261,7 +260,6 @@ RUN groupadd --system mongodb && \
     chown -R unicron:unicron /opt/unicron && \
     chown -R unicron:unicron \
       /var/lib/unicron/backend \
-      /var/lib/unicron/central-auth \
       /var/lib/unicron/notifier \
       /var/lib/unicron/otelcol \
       /var/lib/unicron/victoria-logs \

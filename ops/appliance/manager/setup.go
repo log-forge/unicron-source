@@ -7,9 +7,9 @@ import (
 )
 
 func setupAppliance(cfg RuntimeConfig) error {
-	dirs := []string{
+	for _, dir := range []string{
 		cfg.DataDir + "/backend",
-		cfg.DataDir + "/central-auth",
+		cfg.DataDir + "/mongo",
 		cfg.DataDir + "/notifier",
 		cfg.DataDir + "/otelcol",
 		cfg.DataDir + "/postgres",
@@ -27,11 +27,7 @@ func setupAppliance(cfg RuntimeConfig) error {
 		cfg.StepPath + "/ra-provisioner",
 		"/run/postgresql",
 		cfg.TmpDir,
-	}
-	if cfg.LegacyAuthMigrationRequired {
-		dirs = append(dirs, cfg.DataDir+"/mongo")
-	}
-	for _, dir := range dirs {
+	} {
 		if err := ensureDir(dir, 0o755); err != nil {
 			return fmt.Errorf("create %s: %w", dir, err)
 		}
@@ -49,13 +45,10 @@ func setupAppliance(cfg RuntimeConfig) error {
 		return err
 	}
 	chownR("redis:redis", cfg.DataDir+"/redis")
-	if cfg.LegacyAuthMigrationRequired {
-		chownR("mongodb:mongodb", cfg.DataDir+"/mongo")
-	}
+	chownR("mongodb:mongodb", cfg.DataDir+"/mongo")
 	chownR(
 		"unicron:unicron",
 		cfg.DataDir+"/backend",
-		cfg.DataDir+"/central-auth",
 		cfg.DataDir+"/notifier",
 		cfg.DataDir+"/otelcol",
 		cfg.DataDir+"/victoria-logs",

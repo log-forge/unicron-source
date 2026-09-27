@@ -2,8 +2,10 @@ import { randomBytes } from 'node:crypto';
 import { hashPassword } from 'better-auth/crypto';
 import { DEFAULT_CENTRAL_ADMIN_PASSWORD, LOCAL_EMAIL_DOMAIN } from '../constants';
 import { env } from '../config/env';
-import { getAuthStore, type AuthStore, type AuthUser } from '../db/auth-store';
 import { logger } from '../logging/logger';
+import { AccountModel } from '../models/account.model';
+import { SessionModel } from '../models/session.model';
+import { UserModel, type IUser } from '../models/user.model';
 import { PasswordSchema } from '../schemas/password.schemas';
 import { UsernameSchema } from '../schemas/username.schemas';
 
@@ -34,43 +36,52 @@ function passwordPolicyError(password: string): string | null {
   return parsed.error.issues.map((issue) => issue.message).join('; ');
 }
 
-function usernameForUser(user: Pick<AuthUser, 'username' | 'name' | 'email'>): string {
+function usernameForUser(user: Pick<IUser, 'username' | 'name' | 'email'>): string {
   if (user.username) return String(user.username).trim().toLowerCase();
   if (user.name) return String(user.name).trim().toLowerCase();
-  const email = String(user.email ?? '')
-    .trim()
-    .toLowerCase();
-  return email.endsWith(`@${LOCAL_EMAIL_DOMAIN}`) ? email.slice(0, -1 * `@${LOCAL_EMAIL_DOMAIN}`.length) : email;
+  const email = String(user.email ?? '').trim().toLowerCase();
+  return email.endsWith(`@${LOCAL_EMAIL_DOMAIN}`) ? email.slice(0, -1 * (`@${LOCAL_EMAIL_DOMAIN}`).length) : email;
 }
 
-async function writeCredential(store: AuthStore, user: AuthUser, password: string) {
+async function writeCredential(user: IUser, password: string) {
   const passwordHash = await hashPassword(password);
-  await store.writeCredential(user.id, passwordHash);
-}
 
-async function ensureCredentialIfMissing(store: AuthStore, user: AuthUser, password: string) {
-  if (await store.credentialExists(user.id)) return;
-  await writeCredential(store, user, password);
-}
-
-async function createAdminUser(store: AuthStore, username: string, password: string, requiresPasswordChange: boolean) {
-  const passwordHash = await hashPassword(password);
-  return store.createAdmin(
+  await AccountModel.updateOne(
+    { userId: user._id, providerId: 'credential' },
     {
-      email: syntheticEmailForUsername(username),
-      emailVerified: true,
-      username,
-      displayUsername: username,
-      name: username,
-      requiresPasswordChange,
-      image: null,
+      $set: {
+        userId: user._id,
+        accountId: user._id.toString(),
+        providerId: 'credential',
+        password: passwordHash,
+      },
     },
-    passwordHash,
+    { upsert: true },
   );
 }
 
-async function alignAdminIdentity(store: AuthStore, user: AuthUser, username: string, requiresPasswordChange?: boolean) {
-  const update: Partial<AuthUser> = {
+async function ensureCredentialIfMissing(user: IUser, password: string) {
+  const existingAccount = await AccountModel.findOne({ userId: user._id, providerId: 'credential' });
+  if (existingAccount) return;
+  await writeCredential(user, password);
+}
+
+async function createAdminUser(username: string, password: string, requiresPasswordChange: boolean) {
+  const admin = await UserModel.create({
+    email: syntheticEmailForUsername(username),
+    emailVerified: true,
+    username,
+    displayUsername: username,
+    name: username,
+    requiresPasswordChange,
+  });
+
+  await writeCredential(admin, password);
+  return admin;
+}
+
+async function alignAdminIdentity(user: IUser, username: string, requiresPasswordChange?: boolean) {
+  const update: Record<string, unknown> = {
     email: syntheticEmailForUsername(username),
     emailVerified: true,
     username,
@@ -82,15 +93,15 @@ async function alignAdminIdentity(store: AuthStore, user: AuthUser, username: st
     update.requiresPasswordChange = requiresPasswordChange;
   }
 
-  await store.updateUser(user.id, update);
+  await UserModel.updateOne({ _id: user._id }, { $set: update });
   Object.assign(user, update);
 }
 
-export async function bootstrapLocalAdmin(store: AuthStore = getAuthStore()): Promise<void> {
+export async function bootstrapLocalAdmin(): Promise<void> {
   const username = configuredAdminUsername();
   const configuredPassword = configuredAdminPassword();
 
-  const users = await store.listUsers();
+  const users = await UserModel.find().sort({ createdAt: 1 });
 
   if (users.length > 1) {
     throw new Error(`central/auth bootstrap found ${users.length} existing users. Local appliance auth supports exactly one administrator account.`);
@@ -106,12 +117,18 @@ export async function bootstrapLocalAdmin(store: AuthStore = getAuthStore()): Pr
     }
 
     const requiresPasswordChange = generated || isDefaultAdminBootstrapPassword(password);
-    const admin = await createAdminUser(store, username, password, requiresPasswordChange);
+    const admin = await createAdminUser(username, password, requiresPasswordChange);
 
     if (generated) {
-      logger.warn({ userId: admin.id, username, generatedPassword: password, requiresPasswordChange }, 'Local admin first-boot generated administrator credential');
+      logger.warn(
+        { userId: admin._id.toString(), username, generatedPassword: password, requiresPasswordChange },
+        'Local admin first-boot generated administrator credential',
+      );
     } else {
-      logger.info({ userId: admin.id, username, recoveryOverride: env.CENTRAL_ADMIN_RECOVERY_OVERRIDE, requiresPasswordChange }, 'Local admin bootstrap created administrator');
+      logger.info(
+        { userId: admin._id.toString(), username, recoveryOverride: env.CENTRAL_ADMIN_RECOVERY_OVERRIDE, requiresPasswordChange },
+        'Local admin bootstrap created administrator',
+      );
     }
     return;
   }
@@ -128,10 +145,10 @@ export async function bootstrapLocalAdmin(store: AuthStore = getAuthStore()): Pr
       throw new Error(`CENTRAL_ADMIN_PASSWORD does not meet the password policy: ${passwordError}`);
     }
 
-    await alignAdminIdentity(store, existing, username, true);
-    await writeCredential(store, existing, configuredPassword);
-    await store.deleteSessions(existing.id);
-    logger.warn({ userId: existing.id, username }, 'Local admin recovery rotated administrator credential and revoked sessions');
+    await alignAdminIdentity(existing, username, true);
+    await writeCredential(existing, configuredPassword);
+    await SessionModel.deleteMany({ userId: existing._id });
+    logger.warn({ userId: existing._id.toString(), username }, 'Local admin recovery rotated administrator credential and revoked sessions');
     return;
   }
 
@@ -143,7 +160,7 @@ export async function bootstrapLocalAdmin(store: AuthStore = getAuthStore()): Pr
     );
   }
 
-  const identityUpdates: Partial<AuthUser> = {};
+  const identityUpdates: Record<string, unknown> = {};
   if (existing.email !== syntheticEmailForUsername(username)) identityUpdates.email = syntheticEmailForUsername(username);
   if (!existing.emailVerified) identityUpdates.emailVerified = true;
   if (!existing.username) identityUpdates.username = username;
@@ -151,10 +168,11 @@ export async function bootstrapLocalAdmin(store: AuthStore = getAuthStore()): Pr
   if (!existing.name) identityUpdates.name = username;
 
   if (Object.keys(identityUpdates).length > 0) {
-    await store.updateUser(existing.id, identityUpdates);
+    await UserModel.updateOne({ _id: existing._id }, { $set: identityUpdates });
   }
 
-  if (!(await store.credentialExists(existing.id))) {
+  const existingAccount = await AccountModel.findOne({ userId: existing._id, providerId: 'credential' });
+  if (!existingAccount) {
     if (!configuredPassword) {
       throw new Error('central/auth bootstrap found an existing administrator without a credential. Set CENTRAL_ADMIN_PASSWORD once to repair it.');
     }
@@ -164,12 +182,12 @@ export async function bootstrapLocalAdmin(store: AuthStore = getAuthStore()): Pr
       throw new Error(`CENTRAL_ADMIN_PASSWORD does not meet the password policy: ${passwordError}`);
     }
 
-    await ensureCredentialIfMissing(store, existing, configuredPassword);
+    await ensureCredentialIfMissing(existing, configuredPassword);
   } else if (configuredPassword) {
     logger.warn(
-      { userId: existing.id, username, recoveryOverride: false, sessionsRevoked: false },
+      { userId: existing._id.toString(), username, recoveryOverride: false, sessionsRevoked: false },
       'Configured CENTRAL_ADMIN_PASSWORD is intentionally ignored on normal restart; use CENTRAL_ADMIN_RECOVERY_OVERRIDE=true for credential recovery.',
     );
   }
-  logger.info({ userId: existing.id, username, recoveryOverride: false }, 'Local admin bootstrap reused existing administrator');
+  logger.info({ userId: existing._id.toString(), username, recoveryOverride: false }, 'Local admin bootstrap reused existing administrator');
 }
